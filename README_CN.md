@@ -9,6 +9,8 @@
 
 本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS 与 Windows 两个平台的成品。
 
+> 非官方移植项目，与 CapFrameX / CXWorld 没有隶属或背书关系。
+
 `CoherencyLatency` 测量一条缓存行在两个逻辑 CPU 之间传递的延迟。两个工作线程反复对同一条缓存行执行原子比较交换（`bounce`），或者各自写自己的缓存行、再读取对方的缓存行（`owned`）。程序会测量所有有序逻辑 CPU 对，并输出分号分隔的矩阵。
 
 ## 下载

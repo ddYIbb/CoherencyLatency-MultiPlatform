@@ -9,6 +9,8 @@ A multi-platform collection of ports of `CoherencyLatency`, the cache-coherency 
 
 This repository contains the cross-platform source tree and publishes both builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases).
 
+> This is an unofficial port and is not affiliated with, or endorsed by, CapFrameX or CXWorld.
+
 `CoherencyLatency` measures how long a cache line takes to move between two logical CPUs. Two worker threads repeatedly perform an atomic compare-and-swap on the same cache line (`bounce`) or write their own cache lines and read the other thread's line (`owned`). Every ordered pair of logical CPUs is measured, and the result is written as a semicolon-separated matrix.
 
 ## Download
