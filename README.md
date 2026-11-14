@@ -37,6 +37,7 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 | 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows |
 | 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter` |
 | CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask`；macOS 使用尽力而为的 QoS 提示 |
+| 线程 | 每次 run 都新建两个线程 | 每个核心对复用两个线程，逐轮同步 |
 | 矩阵内存 | O(n² × runs) 采样缓冲 | O(n²) 矩阵，在线取最小值，缓存行对象放在栈上 |
 | 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本 |
 
@@ -48,7 +49,9 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 
 **修复最小值统计。** 原版源码在最小值判断循环里多了一个分号，导致结果实际取的是最后一次 run，而不是最快的 run。本移植版改为在所有 run 中取最小值。
 
-**降低内存占用。** 矩阵只保留一个 O(n²) 的浮点数组。每一对 CPU 的最小值在 run 执行过程中在线更新，不再分配 O(n² × runs) 的采样缓冲；每对 CPU 使用的两个缓存行对象放在栈上。
+**更低的运行开销。** 每个核心对只创建两个线程，用逐轮的启动闸门复用它们跑完所有 run，线程创建/销毁不再混进测量；计时改用整数高精度时钟（Windows `QueryPerformanceCounter`，macOS `mach_absolute_time`），不再受毫秒精度 `ftime` 限制。以 8 个槽位、10 次 run 为例，整轮耗时从 139 ms 降到 54 ms；`--cpus 32` 从 2914 ms 降到 1612 ms。
+
+**降低内存占用。** 矩阵只保留一个 O(n²) 的浮点数组。每一对 CPU 的最小值在 run 执行过程中在线更新，不再分配 O(n² × runs) 的采样缓冲；每对 CPU 使用的两个缓存行对象放在栈上。32 槽位 50 次 run 时峰值工作集 4292 KB，原版为 4428 KB，且原版会随 `--runs` 继续增长。
 
 **保留命令行和输出格式。** 原版的两种模式、参数名、全矩阵输出和分号 CSV 格式保持不变；原有脚本可以继续使用相同参数和默认的 `core_latencies_<time>.csv` 文件名。
 

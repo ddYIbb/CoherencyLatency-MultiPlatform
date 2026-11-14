@@ -8,6 +8,10 @@
 // C++17 + POSIX APIs.  macOS does not provide hard CPU pinning; the affinity
 // policy used here is a best-effort scheduler hint only (see README.md).
 
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS 1
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -24,18 +28,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -72,6 +71,12 @@ constexpr int kBarWidth = 60;
 // at runtime by --list.
 constexpr std::size_t kAtomicAlignment = 128;
 
+// A benchmark worker only needs a few hundred bytes of stack, while the
+// platform default reserves 1 MiB per thread.  The matrix creates a fresh
+// worker pair for every core pair, so an explicit small stack keeps the
+// per-run cost and the address-space footprint low on both platforms.
+constexpr std::size_t kWorkerStackBytes = 128 * 1024;
+
 struct alignas(kAtomicAlignment) AtomicCell {
     std::atomic<std::uint64_t> value;
 
@@ -85,9 +90,14 @@ static_assert(sizeof(AtomicCell) % kAtomicAlignment == 0,
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
               "64-bit atomics must be lock-free for this benchmark");
 
+// One gate is shared by the two workers of a core pair.  Instead of creating
+// two new threads for every sample, the pair is created once and then walks a
+// sequence of rounds: round_go releases the workers, round_done counts the
+// finished workers (two increments per round).
 struct StartGate {
     std::atomic<int> ready{0};
-    std::atomic<bool> go{false};
+    std::atomic<int> round_go{0};
+    std::atomic<int> round_done{0};
     std::atomic<bool> abort{false};
 };
 
@@ -97,6 +107,7 @@ struct ThreadConfig {
     AtomicCell* target = nullptr;
     AtomicCell* read_target = nullptr;
     int cpu_index = 0;
+    int rounds = 1;
     bool use_affinity = true;
     StartGate* gate = nullptr;
 };
@@ -143,21 +154,38 @@ std::uint64_t now_ns() {
 #if defined(__APPLE__)
     // mach_absolute_time works back to the earliest supported macOS versions,
     // unlike clock_gettime (10.12+) and std::chrono::system_clock (10.12+).
+    // The timebase is queried once; every call is a single mach trap plus one
+    // multiply/shift-free conversion when numer == denom (the Apple Silicon
+    // case, where both are 1).
     static const mach_timebase_info_data_t timebase = [] {
         mach_timebase_info_data_t value{};
         mach_timebase_info(&value);
         return value;
     }();
-    return static_cast<std::uint64_t>(mach_absolute_time()) *
-           static_cast<std::uint64_t>(timebase.numer) /
+    const std::uint64_t ticks = static_cast<std::uint64_t>(mach_absolute_time());
+    if (timebase.numer == timebase.denom) {
+        return ticks;
+    }
+    return ticks * static_cast<std::uint64_t>(timebase.numer) /
            static_cast<std::uint64_t>(timebase.denom);
 #elif defined(_WIN32)
-    LARGE_INTEGER frequency;
+    // QueryPerformanceFrequency is constant for the life of the process, so it
+    // is resolved once instead of on every sample.  The conversion uses
+    // integer arithmetic: q * 1e9 + (r * 1e9) / freq keeps full precision
+    // without the rounding of a double division.
+    static const std::uint64_t ticks_per_second = [] {
+        LARGE_INTEGER frequency;
+        if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0) {
+            return static_cast<std::uint64_t>(frequency.QuadPart);
+        }
+        return static_cast<std::uint64_t>(0);
+    }();
     LARGE_INTEGER counter;
-    if (QueryPerformanceFrequency(&frequency) && QueryPerformanceCounter(&counter)) {
-        return static_cast<std::uint64_t>(
-            (static_cast<double>(counter.QuadPart) * 1000000000.0) /
-            static_cast<double>(frequency.QuadPart));
+    if (ticks_per_second != 0 && QueryPerformanceCounter(&counter)) {
+        const std::uint64_t ticks = static_cast<std::uint64_t>(counter.QuadPart);
+        const std::uint64_t whole = ticks / ticks_per_second;
+        const std::uint64_t rest = ticks % ticks_per_second;
+        return whole * 1000000000ULL + (rest * 1000000000ULL) / ticks_per_second;
     }
 #else
     struct timespec ts {};
@@ -227,17 +255,32 @@ CpuInfo read_cpu_info() {
     info.model = sysctl_string("machdep.cpu.brand_string");
 #endif
 
+#if defined(_WIN32)
+    // GetSystemInfo is available on every supported Windows version.  On
+    // modern systems try GetActiveProcessorCount dynamically so >64 logical
+    // CPUs are still reported without adding a Windows 7-only import.
+    SYSTEM_INFO system_info{};
+    GetSystemInfo(&system_info);
+    if (system_info.dwNumberOfProcessors > 0) {
+        info.logical = static_cast<int>(system_info.dwNumberOfProcessors);
+    }
+    if (info.logical <= 1) {
+        using GetActiveProcessorCountFn = DWORD(WINAPI*)(WORD);
+        const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+        const auto get_active = kernel
+            ? reinterpret_cast<GetActiveProcessorCountFn>(
+                  GetProcAddress(kernel, "GetActiveProcessorCount"))
+            : nullptr;
+        if (get_active != nullptr) {
+            const DWORD active = get_active(0xFFFF);
+            if (active > 0) {
+                info.logical = static_cast<int>(active);
+            }
+        }
+    }
+#else
     if (info.logical <= 0) {
         info.logical = static_cast<int>(std::thread::hardware_concurrency());
-    }
-#if defined(_WIN32)
-    // Some sandboxed/containerized Windows processes report one processor via
-    // hardware_concurrency(); GetActiveProcessorCount gives the host view.
-    if (info.logical <= 1) {
-        const DWORD active = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-        if (active > 0) {
-            info.logical = static_cast<int>(active);
-        }
     }
 #endif
     if (info.logical <= 0) {
@@ -263,23 +306,30 @@ CpuInfo read_cpu_info() {
 }
 
 void print_cpu_info(const CpuInfo& info) {
-    std::cout << "CPU: " << (info.model.empty() ? "unknown" : info.model) << '\n';
-    std::cout << "Logical CPUs: " << info.logical << '\n';
-    std::cout << "Physical CPUs: " << info.physical << '\n';
+    std::printf("CPU: %s\n", info.model.empty() ? "unknown" : info.model.c_str());
+    std::printf("Logical CPUs: %d\n", info.logical);
+    std::printf("Physical CPUs: %d\n", info.physical);
+#if defined(_M_ARM64)
+    std::printf("Architecture: ARM64\n");
+#elif defined(_M_X64)
+    std::printf("Architecture: x64\n");
+#elif defined(_M_IX86)
+    std::printf("Architecture: x86 (32-bit)\n");
+#endif
     if (info.perf_level0 > 0) {
-        std::cout << "Performance-level cores (perflevel0): " << info.perf_level0
-                  << '\n';
+        std::printf("Performance-level cores (perflevel0): %d\n", info.perf_level0);
     }
     if (info.perf_level1 > 0) {
-        std::cout << "Efficiency-level cores (perflevel1): " << info.perf_level1
-                  << '\n';
+        std::printf("Efficiency-level cores (perflevel1): %d\n", info.perf_level1);
     }
-    std::cout << "Cache line: " << info.cache_line << " bytes\n";
-#if defined(__APPLE__)
-    std::cout << "Affinity: best-effort scheduler hint only "
-                 "(macOS does not expose hard CPU pinning)\n";
+    std::printf("Cache line: %d bytes\n", info.cache_line);
+#if defined(_WIN32)
+    std::printf("Affinity: SetThreadAffinityMask (logical processor pinning)\n");
+#elif defined(__APPLE__)
+    std::printf("Affinity: best-effort scheduler hint only "
+                "(macOS does not expose hard CPU pinning)\n");
 #else
-    std::cout << "Affinity: platform fallback\n";
+    std::printf("Affinity: platform fallback\n");
 #endif
 }
 
@@ -318,8 +368,13 @@ void configure_current_thread(int cpu_index, bool use_affinity) {
     pthread_setname_np(name);
 #elif defined(_WIN32)
     if (use_affinity) {
+#if defined(_WIN64)
         const std::uintptr_t mask =
             static_cast<std::uintptr_t>(1) << (cpu_index & 63);
+#else
+        const std::uintptr_t mask =
+            static_cast<std::uintptr_t>(1) << (cpu_index & 31);
+#endif
         SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask));
     }
 #else
@@ -337,25 +392,17 @@ void configure_current_thread(int cpu_index, bool use_affinity) {
 #endif
 }
 
-bool begin_worker(ThreadConfig* config) {
-    configure_current_thread(config->cpu_index, config->use_affinity);
-    config->gate->ready.fetch_add(1, std::memory_order_acq_rel);
-    while (!config->gate->go.load(std::memory_order_acquire)) {
-        if (config->gate->abort.load(std::memory_order_acquire)) {
-            return false;
-        }
-        std::this_thread::yield();
-    }
-    return !config->gate->abort.load(std::memory_order_acquire);
+void yield_current_thread() {
+#if defined(_WIN32)
+    SwitchToThread();
+#else
+    std::this_thread::yield();
+#endif
 }
 
 // Bounce mode: both threads contend with a compare-and-swap on the same
 // cache line.  This is the direct analogue of _InterlockedCompareExchange64.
 void bounce_worker(ThreadConfig* config) {
-    if (!begin_worker(config)) {
-        return;
-    }
-
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
@@ -373,10 +420,6 @@ void bounce_worker(ThreadConfig* config) {
 // Owned mode: each thread writes to its own cache line and polls the other
 // thread's line with acquire/release semantics.
 void owned_worker(ThreadConfig* config) {
-    if (!begin_worker(config)) {
-        return;
-    }
-
     std::atomic<std::uint64_t>& read_target = config->read_target->value;
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
@@ -392,26 +435,155 @@ void owned_worker(ThreadConfig* config) {
 
 using WorkerFunction = void (*)(ThreadConfig*);
 
-float time_threads(int processor1, int processor2, std::uint64_t iterations,
-                   ThreadConfig config1, ThreadConfig config2,
-                   WorkerFunction worker, bool use_affinity) {
+// A worker pair that stays alive for all samples of one core pair.  Creating
+// and destroying two threads per sample dominated the run time of short
+// measurements; the pair now synchronises through round counters instead.
+class WorkerThread {
+public:
+    WorkerThread() = default;
+    ~WorkerThread() { join(); }
+
+    WorkerThread(const WorkerThread&) = delete;
+    WorkerThread& operator=(const WorkerThread&) = delete;
+
+    void start(WorkerFunction function, ThreadConfig* config) {
+        start_data_.function = function;
+        start_data_.config = config;
+#if defined(_WIN32)
+        handle_ = CreateThread(nullptr, kWorkerStackBytes, &WorkerThread::entry,
+                               &start_data_, 0, nullptr);
+        if (handle_ == nullptr) {
+            throw std::runtime_error("failed to create benchmark thread");
+        }
+#else
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0) {
+            throw std::runtime_error("failed to create benchmark thread");
+        }
+        pthread_attr_setstacksize(&attributes, kWorkerStackBytes);
+        const int result = pthread_create(&thread_, &attributes,
+                                          &WorkerThread::entry, &start_data_);
+        pthread_attr_destroy(&attributes);
+        if (result != 0) {
+            throw std::runtime_error("failed to create benchmark thread");
+        }
+        started_ = true;
+#endif
+    }
+
+    void join() {
+#if defined(_WIN32)
+        if (handle_ != nullptr) {
+            WaitForSingleObject(handle_, INFINITE);
+            CloseHandle(handle_);
+            handle_ = nullptr;
+        }
+#else
+        if (started_) {
+            pthread_join(thread_, nullptr);
+            started_ = false;
+        }
+#endif
+    }
+
+    bool joinable() const {
+#if defined(_WIN32)
+        return handle_ != nullptr;
+#else
+        return started_;
+#endif
+    }
+
+private:
+    struct StartData {
+        WorkerFunction function = nullptr;
+        ThreadConfig* config = nullptr;
+    };
+
+    // Worker body: pin the thread once, then serve every round of the pair.
+    static void run(StartData* data) {
+        ThreadConfig* config = data->config;
+        StartGate* gate = config->gate;
+        configure_current_thread(config->cpu_index, config->use_affinity);
+        gate->ready.fetch_add(1, std::memory_order_acq_rel);
+
+        for (int round = 0; round < config->rounds; ++round) {
+            while (gate->round_go.load(std::memory_order_acquire) <= round) {
+                if (gate->abort.load(std::memory_order_acquire)) {
+                    return;
+                }
+                yield_current_thread();
+            }
+            if (gate->abort.load(std::memory_order_acquire)) {
+                return;
+            }
+            data->function(config);
+            gate->round_done.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+#if defined(_WIN32)
+    static DWORD WINAPI entry(LPVOID parameter) {
+        run(static_cast<StartData*>(parameter));
+        return 0;
+    }
+
+    HANDLE handle_ = nullptr;
+#else
+    static void* entry(void* parameter) {
+        run(static_cast<StartData*>(parameter));
+        return nullptr;
+    }
+
+    pthread_t thread_{};
+    bool started_ = false;
+#endif
+    StartData start_data_{};
+};
+
+// Runs all samples of one core pair and returns the fastest one, which is the
+// same statistic the original computed by storing n*n*runs values and taking
+// the minimum afterwards.
+float run_pair(int processor1, int processor2, std::uint64_t iterations,
+               std::uint64_t runs, bool owned_mode, bool use_affinity) {
+    // Separate 128-byte-aligned cells keep the two owners on distinct cache
+    // lines on Apple Silicon (whose cache line is commonly 128 bytes).
+    // Stack storage avoids two heap allocations per run.
+    AtomicCell target1(owned_mode ? 1u : 0u);
+    AtomicCell target2(0);
+
     StartGate gate;
+
+    ThreadConfig config1;
+    config1.start = owned_mode ? 3 : 1;
+    config1.iterations = iterations;
+    config1.target = &target1;
+    config1.read_target = &target2;
     config1.cpu_index = processor1;
-    config2.cpu_index = processor2;
+    config1.rounds = static_cast<int>(runs);
     config1.use_affinity = use_affinity;
-    config2.use_affinity = use_affinity;
     config1.gate = &gate;
+
+    ThreadConfig config2;
+    config2.start = 2;
+    config2.iterations = iterations;
+    config2.target = owned_mode ? &target2 : &target1;
+    config2.read_target = &target1;
+    config2.cpu_index = processor2;
+    config2.rounds = static_cast<int>(runs);
+    config2.use_affinity = use_affinity;
     config2.gate = &gate;
 
-    std::thread thread1;
-    std::thread thread2;
+    WorkerThread thread1;
+    WorkerThread thread2;
 
+    const WorkerFunction worker = owned_mode ? owned_worker : bounce_worker;
     try {
-        thread1 = std::thread(worker, &config1);
-        thread2 = std::thread(worker, &config2);
+        thread1.start(worker, &config1);
+        thread2.start(worker, &config2);
     } catch (...) {
         gate.abort.store(true, std::memory_order_release);
-        gate.go.store(true, std::memory_order_release);
+        gate.round_go.store(config1.rounds, std::memory_order_release);
         if (thread1.joinable()) {
             thread1.join();
         }
@@ -422,71 +594,52 @@ float time_threads(int processor1, int processor2, std::uint64_t iterations,
     }
 
     while (gate.ready.load(std::memory_order_acquire) < 2) {
-        std::this_thread::yield();
+        yield_current_thread();
     }
 
-    const std::uint64_t start = now_ns();
-    gate.go.store(true, std::memory_order_release);
+    float minimum = std::numeric_limits<float>::infinity();
+    try {
+        for (int round = 0; round < config1.rounds; ++round) {
+            // Both workers are waiting for the next round here, so the shared
+            // cells can be reset without any additional synchronisation.
+            target1.value.store(owned_mode ? 1u : 0u, std::memory_order_relaxed);
+            target2.value.store(0u, std::memory_order_relaxed);
+
+            const std::uint64_t start = now_ns();
+            gate.round_go.store(round + 1, std::memory_order_release);
+            while (gate.round_done.load(std::memory_order_acquire) <
+                   2 * (round + 1)) {
+                yield_current_thread();
+            }
+            const std::uint64_t end = now_ns();
+            if (end <= start) {
+                throw std::runtime_error("monotonic clock did not advance");
+            }
+
+            // Each thread performs 'iterations' successful lock operations, so
+            // the average latency per locked operation is total time /
+            // (2 * iterations).
+            const double latency_ns = static_cast<double>(end - start) /
+                                      static_cast<double>(iterations) / 2.0;
+            const float value = static_cast<float>(latency_ns);
+            if (value < minimum) {
+                minimum = value;
+            }
+        }
+    } catch (...) {
+        // Release any worker still waiting for a round, then join them before
+        // propagating the error.
+        gate.abort.store(true, std::memory_order_release);
+        gate.round_go.store(config1.rounds, std::memory_order_release);
+        thread1.join();
+        thread2.join();
+        throw;
+    }
 
     thread1.join();
     thread2.join();
-
-    const std::uint64_t end = now_ns();
-    if (end <= start) {
-        throw std::runtime_error("monotonic clock did not advance");
-    }
-
-    // Each thread performs 'iterations' successful lock operations, so the
-    // average latency per locked operation is total time / (2 * iterations).
-    const double latency_ns =
-        static_cast<double>(end - start) / static_cast<double>(iterations) / 2.0;
-    return static_cast<float>(latency_ns);
+    return minimum;
 }
-
-float run_bounce(int processor1, int processor2, std::uint64_t iterations,
-                 bool use_affinity) {
-    // Use stack allocation: the 128-byte-aligned cell is created and destroyed
-    // per run, so a heap allocation here is pure overhead and fragmentation.
-    AtomicCell cell(0);
-
-    ThreadConfig config1;
-    config1.start = 1;
-    config1.iterations = iterations;
-    config1.target = &cell;
-
-    ThreadConfig config2;
-    config2.start = 2;
-    config2.iterations = iterations;
-    config2.target = &cell;
-
-    return time_threads(processor1, processor2, iterations, config1, config2,
-                        bounce_worker, use_affinity);
-}
-
-float run_owned(int processor1, int processor2, std::uint64_t iterations,
-                bool use_affinity) {
-    // Separate 128-byte-aligned cells keep the two owners on distinct cache
-    // lines on Apple Silicon (whose cache line is commonly 128 bytes).
-    // Stack storage avoids two heap allocations per run.
-    AtomicCell target1(1);
-    AtomicCell target2(0);
-
-    ThreadConfig config1;
-    config1.start = 3;
-    config1.iterations = iterations;
-    config1.target = &target1;
-    config1.read_target = &target2;
-
-    ThreadConfig config2;
-    config2.start = 2;
-    config2.iterations = iterations;
-    config2.target = &target2;
-    config2.read_target = &target1;
-
-    return time_threads(processor1, processor2, iterations, config1, config2,
-                        owned_worker, use_affinity);
-}
-
 // ---------------------------------------------------------------------------
 // Matrix
 // ---------------------------------------------------------------------------
@@ -501,23 +654,17 @@ void print_progress(int done, int total) {
         total > 0 ? static_cast<double>(done) / static_cast<double>(total) : 1.0;
     const int pos = static_cast<int>(kBarWidth * progress);
 
-    std::cout << '[';
+    char bar[kBarWidth + 1];
     for (int i = 0; i < kBarWidth; ++i) {
-        if (i < pos) {
-            std::cout << '=';
-        } else if (i == pos) {
-            std::cout << '>';
-        } else {
-            std::cout << ' ';
-        }
+        bar[i] = i < pos ? '=' : (i == pos ? '>' : ' ');
     }
-    std::cout << "] " << static_cast<int>(progress * 100.0) << " %\r"
-              << std::flush;
+    bar[kBarWidth] = '\0';
+
+    std::printf("[%s] %d %%\r", bar, static_cast<int>(progress * 100.0));
+    std::fflush(stdout);
 }
 
 MatrixResult run_matrix(const Options& options, int n) {
-    const std::size_t runs = static_cast<std::size_t>(options.runs);
-
     MatrixResult result;
     result.n = n;
     result.filtered.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n),
@@ -533,19 +680,9 @@ MatrixResult run_matrix(const Options& options, int n) {
             if (i == j) {
                 continue;
             }
-
-            float minimum = std::numeric_limits<float>::infinity();
-            for (std::size_t k = 0; k < runs; ++k) {
-                const float value =
-                    owned_mode
-                        ? run_owned(i, j, options.iterations, options.use_affinity)
-                        : run_bounce(i, j, options.iterations,
-                                     options.use_affinity);
-                if (value < minimum) {
-                    minimum = value;
-                }
-            }
-            result.filtered[matrix_index(n, i, j)] = minimum;
+            result.filtered[matrix_index(n, i, j)] =
+                run_pair(i, j, options.iterations, options.runs, owned_mode,
+                         options.use_affinity);
         }
 
         if (options.progress) {
@@ -554,7 +691,7 @@ MatrixResult run_matrix(const Options& options, int n) {
     }
 
     if (options.progress) {
-        std::cout << '\n';
+        std::fputc('\n', stdout);
     }
 
     // Same symmetry as the original: average each off-diagonal pair with its
@@ -574,19 +711,20 @@ MatrixResult run_matrix(const Options& options, int n) {
 }
 
 void print_matrix(const MatrixResult& result) {
-    std::cout << std::fixed << std::setprecision(6);
     for (int i = 0; i < result.n; ++i) {
         for (int j = 0; j < result.n; ++j) {
             if (j != 0) {
-                std::cout << ',';
+                std::fputc(',', stdout);
             }
             if (i == j) {
-                std::cout << 'x';
+                std::fputc('x', stdout);
             } else {
-                std::cout << result.filtered[matrix_index(result.n, i, j)];
+                // %.6f matches the original std::fixed << setprecision(6).
+                std::printf("%.6f", static_cast<double>(
+                                        result.filtered[matrix_index(result.n, i, j)]));
             }
         }
-        std::cout << '\n';
+        std::fputc('\n', stdout);
     }
 }
 
@@ -604,51 +742,52 @@ std::string default_csv_name() {
     }
 #endif
 
-    std::ostringstream filename;
-    filename << "core_latencies_"
-             << std::put_time(&local_time, "%Y%m%d_%H%M%S") << ".csv";
-    return filename.str();
+    char stamp[32] = {};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_time);
+    return std::string("core_latencies_") + stamp + ".csv";
 }
 
 void write_csv(const std::string& path, const MatrixResult& result) {
-    std::ofstream output(path, std::ios::out | std::ios::trunc);
-    if (!output.is_open()) {
+    // Text mode keeps the original ofstream behaviour (CRLF on Windows, LF on
+    // macOS) so the CSV bytes are unchanged.
+    std::FILE* output = std::fopen(path.c_str(), "w");
+    if (output == nullptr) {
         throw std::runtime_error("failed to open CSV file for writing: " + path);
     }
 
-    // Match the original stream formatting: defaultfloat with precision 6.
-    output << std::defaultfloat << std::setprecision(6);
-
     // Preserve the original semicolon-delimited layout exactly.
-    output << ';';
+    std::fputc(';', output);
     for (int i = 0; i < result.n; ++i) {
         if (i != 0) {
-            output << ';';
+            std::fputc(';', output);
         }
-        output << "Core " << i;
+        std::fprintf(output, "Core %d", i);
     }
-    output << '\n';
+    std::fputc('\n', output);
 
     for (int i = 0; i < result.n; ++i) {
-        output << "Core " << i << ';';
+        std::fprintf(output, "Core %d;", i);
         for (int j = 0; j < result.n; ++j) {
             if (j != 0) {
-                output << ';';
+                std::fputc(';', output);
             }
             if (i == j) {
-                output << 'x';
+                std::fputc('x', output);
             } else {
-                output << result.filtered[matrix_index(result.n, i, j)];
+                // %.6g matches the original std::defaultfloat << setprecision(6).
+                std::fprintf(output, "%.6g", static_cast<double>(
+                                                 result.filtered[matrix_index(
+                                                     result.n, i, j)]));
             }
         }
-        output << '\n';
+        std::fputc('\n', output);
     }
 
-    if (!output) {
+    if (std::ferror(output) != 0) {
+        std::fclose(output);
         throw std::runtime_error("failed while writing CSV file: " + path);
     }
-    output.close();
-    if (!output) {
+    if (std::fclose(output) != 0) {
         throw std::runtime_error("failed to close CSV file: " + path);
     }
 }
@@ -787,38 +926,36 @@ Options parse_options(int argc, char** argv) {
 }
 
 void print_usage(const char* program) {
-    std::cout
-        << "CoherencyLatency " << kVersion
-        << " - native macOS/ARM64 port of MicroBenchX CoherencyLatency\n\n"
-        << "Usage:\n"
-        << "  " << program << " [options]\n"
-        << "  " << program << " [iterations] [bounce|owned]\n\n"
-        << "Options:\n"
-        << "  -i, --iterations N   Successful lock operations per thread "
-           "(default: 1000000)\n"
-        << "  -r, --runs N         Samples per core pair (default: 10)\n"
-        << "  -m, --mode MODE      bounce (same cache line, default) or owned "
-           "(separate lines)\n"
-        << "      --cpus N         Use at most N logical slots (default: all logical "
-           "CPUs)\n"
-        << "      --perf-only      On Apple Silicon, limit logical slots to the "
-           "detectable perflevel0 count\n"
-        << "      --csv PATH       CSV output path (default: core_latencies_<time>.csv "
-           "in cwd)\n"
-        << "  -y, --yes            Do not wait for Enter before/after the test\n"
-        << "      --no-progress    Disable the progress bar\n"
-        << "      --no-affinity    Disable the best-effort affinity/QoS hint\n"
-        << "      --list           Print CPU information and exit\n"
-        << "  -h, --help           Show this help\n"
-        << "      --version        Show version\n\n"
-        << "Notes:\n"
-        << "  macOS cannot pin threads to individual cores.  The port uses a\n"
-        << "  best-effort thread-affinity policy hint; results can vary with the\n"
-        << "  scheduler, P/E-core placement, thermal state and background load.\n"
-        << "  The matrix is not a verified core-to-core topology; its indices are\n"
-        << "  logical slots, not physical core IDs.\n"
-        << "  For reproducible numbers, close other applications, connect power,\n"
-        << "  and consider --perf-only on Apple Silicon.\n";
+    std::printf("CoherencyLatency %s%s", kVersion, " - native macOS/ARM64 port of MicroBenchX CoherencyLatency\n\n");
+    std::printf("Usage:\n  %s [options]\n  %s [iterations] [bounce|owned]\n\n",
+                program, program);
+    std::printf(
+        "Options:\n"
+        "  -i, --iterations N   Successful lock operations per thread "
+        "(default: 1000000)\n"
+        "  -r, --runs N         Samples per core pair (default: 10)\n"
+        "  -m, --mode MODE      bounce (same cache line, default) or owned "
+        "(separate lines)\n"
+        "      --cpus N         Use at most N logical slots (default: all logical "
+        "CPUs)\n"
+        "      --perf-only      On Apple Silicon, limit logical slots to the "
+        "detectable perflevel0 count\n"
+        "      --csv PATH       CSV output path (default: core_latencies_<time>.csv "
+        "in cwd)\n"
+        "  -y, --yes            Do not wait for Enter before/after the test\n"
+        "      --no-progress    Disable the progress bar\n"
+        "      --no-affinity    Disable the best-effort affinity/QoS hint\n"
+        "      --list           Print CPU information and exit\n"
+        "  -h, --help           Show this help\n"
+        "      --version        Show version\n\n");
+    std::printf("%s", "Notes:\n"
+        "  macOS cannot pin threads to individual cores.  The port uses a\n"
+        "  best-effort thread-affinity policy hint; results can vary with the\n"
+        "  scheduler, P/E-core placement, thermal state and background load.\n"
+        "  The matrix is not a verified core-to-core topology; its indices are\n"
+        "  logical slots, not physical core IDs.\n"
+        "  For reproducible numbers, close other applications, connect power,\n"
+        "  and consider --perf-only on Apple Silicon.\n");
 }
 
 bool stdout_is_tty() {
@@ -830,9 +967,12 @@ bool stdout_is_tty() {
 }
 
 void wait_for_enter(const char* prompt) {
-    std::cout << prompt << std::flush;
-    std::string line;
-    std::getline(std::cin, line);
+    std::fputs(prompt, stdout);
+    std::fflush(stdout);
+    char buffer[256];
+    if (std::fgets(buffer, sizeof(buffer), stdin) == nullptr) {
+        return;
+    }
 }
 
 const char* mode_name(Mode mode) {
@@ -842,7 +982,9 @@ const char* mode_name(Mode mode) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::ios::sync_with_stdio(false);
+    // A single large stdout buffer replaces the per-insertion buffering of the
+    // iostream path and keeps the matrix output to one write per chunk.
+    std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
 
     try {
         Options options = parse_options(argc, argv);
@@ -852,27 +994,33 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (options.show_version) {
-            std::cout << "CoherencyLatency " << kVersion << '\n';
+            std::printf("CoherencyLatency %s\n", kVersion);
             return 0;
         }
 
         const CpuInfo cpu = read_cpu_info();
-        std::cout << "CoherencyLatency " << kVersion << '\n';
+        std::printf("CoherencyLatency %s\n", kVersion);
         print_cpu_info(cpu);
 
 #if defined(__APPLE__)
-        std::cout << "Placement: macOS provides no hard CPU pinning; matrix indices "
-                     "are logical slots, not verified physical core IDs.\n";
+        std::printf("Placement: macOS provides no hard CPU pinning; matrix indices "
+                    "are logical slots, not verified physical core IDs.\n");
 #endif
 
 #if defined(__APPLE__)
         if (sysctl_int("sysctl.proc_translated", 0) != 0) {
-            std::cout << "Warning: running under Rosetta 2; this is not a native "
-                         "arm64 execution. Use the arm64 build.\n";
+            std::printf("Warning: running under Rosetta 2; this is not a native "
+                        "arm64 execution. Use the arm64 build.\n");
         }
-#elif !defined(__aarch64__) && !defined(_M_ARM64)
-        std::cout << "Note: this is a non-ARM development build; affinity is a "
-                     "fallback.\n";
+#elif defined(_M_ARM64)
+        std::printf("Runtime: native ARM64\n");
+#elif defined(_M_X64)
+        std::printf("Runtime: x64\n");
+#elif defined(_M_IX86)
+        std::printf("Runtime: x86 (32-bit)\n");
+#else
+        std::printf("Note: this is a non-ARM development build; affinity is a "
+                    "fallback.\n");
 #endif
 
         if (options.list_only) {
@@ -884,8 +1032,8 @@ int main(int argc, char** argv) {
             if (cpu.perf_level0 > 0) {
                 cpu_count = cpu.perf_level0;
             } else {
-                std::cout << "Note: perflevel0 core count is unavailable; using "
-                             "all logical CPUs.\n";
+                std::printf("Note: perflevel0 core count is unavailable; using "
+                            "all logical CPUs.\n");
             }
         }
         if (options.cpus > 0) {
@@ -895,10 +1043,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("at least 2 CPUs are required");
         }
 
-        std::cout << "Mode: " << mode_name(options.mode)
-                  << "; CPUs: " << cpu_count
-                  << "; iterations: " << options.iterations
-                  << "; runs: " << options.runs << '\n';
+        std::printf("Mode: %s; CPUs: %d; iterations: %llu; runs: %llu\n",
+                    mode_name(options.mode), cpu_count,
+                    static_cast<unsigned long long>(options.iterations),
+                    static_cast<unsigned long long>(options.runs));
 
         if (!options.assume_yes) {
             wait_for_enter("Press Enter to start the test...");
@@ -910,20 +1058,20 @@ int main(int argc, char** argv) {
 
         const MatrixResult result = run_matrix(options, cpu_count);
 
-        std::cout << "Latency matrix (ns per operation; diagonal x):\n";
+        std::printf("Latency matrix (ns per operation; diagonal x):\n");
         print_matrix(result);
 
         const std::string csv_path =
             options.csv_path.empty() ? default_csv_name() : options.csv_path;
         write_csv(csv_path, result);
-        std::cout << "Latencies written to " << csv_path << '\n';
+        std::printf("Latencies written to %s\n", csv_path.c_str());
 
         if (!options.assume_yes) {
             wait_for_enter("Press Enter to close...");
         }
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "error: " << error.what() << '\n';
+        std::fprintf(stderr, "error: %s\n", error.what());
         return 2;
     }
 }
