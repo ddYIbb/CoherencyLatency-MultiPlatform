@@ -1,0 +1,7 @@
+#define IDR_X86 101
+#define IDR_X64 102
+#define IDR_ARM64 103
+
+IDR_X86 RCDATA "payload_x86.exe"
+IDR_X64 RCDATA "payload_x64.exe"
+IDR_ARM64 RCDATA "payload_arm64.exe"

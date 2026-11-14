@@ -1,0 +1,31 @@
+﻿CoherencyLatency 兼容版（Windows x86 / x64 / ARM64）
+====================================================
+
+这个文件夹是 MicroBenchX CoherencyLatency 的 Windows 兼容版，包含三个架构：
+
+  x86\CoherencyLatency.exe      32 位 Windows（Win32）
+  x64\CoherencyLatency.exe      64 位 Windows（x64）
+  ARM64\CoherencyLatency.exe    Windows on ARM（ARM64 原生）
+
+最简单的运行方法：
+  双击本文件夹里的「启动.bat」，它会自动识别当前 Windows 架构并启动对应版本。
+
+也可以手动运行：
+  32 位 Windows：x86\CoherencyLatency.exe
+  64 位 Windows：x64\CoherencyLatency.exe
+  Windows on ARM：ARM64\CoherencyLatency.exe
+
+常用命令：
+  CoherencyLatency.exe --list
+  CoherencyLatency.exe --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
+  CoherencyLatency.exe --help
+
+说明：
+- 三个版本由同一份源码构建，功能一致；x86 版是 32 位，x64 版是 64 位，ARM64 版是 Windows on ARM 原生 64 位。
+- 程序会把工作线程绑定到指定逻辑处理器。矩阵的下标是逻辑处理器编号，不一定等于物理核心编号。
+- x86 版可以在 64 位 Windows 上通过 WOW64 运行；ARM64 版只能在 Windows on ARM 上原生运行。
+- 输出 CSV 使用分号分隔，文件名为 core_latencies_<时间>.csv，默认生成在当前目录。
+- 三个 exe 都静态链接 C/C++ 运行库，不需要另外安装 Visual C++ Redistributable。
+- 最低系统：Windows Vista SP2（x86/x64）；Windows on ARM 需 Windows 10/11 ARM64；不支持 Windows XP。
+- 源码和构建脚本在「源码」子文件夹；重新构建需要 Visual Studio 的 C++ 桌面开发工具（含 x86/x64/ARM64 工具链）。
+- 原始项目：https://github.com/CXWorld/MicroBenchX （MIT License）

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoherencyLatency macOS 使用手册</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 34px 28px 80px; line-height: 1.75; color: #1f2328; }
+  h1 { font-size: 2em; border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
+  h2 { margin-top: 2em; border-bottom: 1px solid #d8dee4; padding-bottom: .25em; }
+  h3 { margin-top: 1.4em; }
+  code { background: #f1f3f5; border-radius: 4px; padding: .12em .3em; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .9em; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 14px 16px; overflow: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 1em 0; padding: .7em 1em; border-left: 4px solid #d97706; background: #fff8eb; color: #5f3b00; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  a { color: #0969da; }
+  @media print { body { max-width: none; padding: 0; margin: 20mm; } a { color: #000; text-decoration: none; } pre, blockquote { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } }
+</style>
+</head>
+<body>
+<h1>CoherencyLatency macOS 使用手册</h1>
+<p><strong>版本：</strong> 1.0.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Intel（x86_64）Mac：macOS 10.7 Lion 或更高；Apple Silicon（arm64）Mac：macOS 11.0 或更高。主程序为 Universal 2 单文件。</p>
+<blockquote><p><strong>重要限制</strong>：macOS 不提供硬性 CPU 绑定。本工具<strong>不能保证</strong>测量“指定 core i ↔ core j”的核间延迟；矩阵中的 <code>i</code>/<code>j</code> 只是逻辑槽位，不是物理核心编号，也不保证线程落在指定的 P 核或 E 核上。若要测量严格的核心对延迟，请使用原版 Windows 程序，或 Linux 上支持 <code>taskset</code>/<code>sched_setaffinity</code> 的环境。</p></blockquote>
+<h2>1. 文件夹内容</h2>
+<pre><code>CoherencyLatency-macOS-Release/
+└── CoherencyLatency      主程序（Universal 2：x86_64 + arm64）</code></pre>
+<p>主程序是自包含的 Universal 2 可执行文件（Intel x86_64 + Apple Silicon arm64），只依赖 macOS 自带的 <code>/usr/lib/libSystem.B.dylib</code>，不需要安装 Homebrew、CMake 或其他运行库。</p>
+<h2>2. 首次运行</h2>
+<h3>2.1 放到本地目录</h3>
+<p>建议先把整个文件夹复制到“应用程序”或“下载”之外的位置，例如：</p>
+<pre><code>~/Applications/CoherencyLatency-macOS-Release</code></pre>
+<p>不要直接在 ZIP 压缩包里运行。</p>
+<h3>2.2 解除权限和隔离</h3>
+<p>打开“终端”，进入文件夹：</p>
+<pre><code>cd ~/Applications/CoherencyLatency-macOS-Release
+chmod +x CoherencyLatency
+xattr -dr com.apple.quarantine .</code></pre>
+<p>如果 macOS 仍提示“无法打开，因为无法验证开发者”：</p>
+<ol><li>在 Finder 中右键点击 <code>CoherencyLatency</code>，选择“打开”；</li><li>或到“系统设置 → 隐私与安全性”中点击“仍要打开”；</li><li>仍不行时执行：</li></ol>
+<pre><code>codesign --force --deep --sign - CoherencyLatency</code></pre>
+<h3>2.3 先检查程序</h3>
+<pre><code>./CoherencyLatency --list</code></pre>
+<p>应看到 <code>CoherencyLatency 1.0.0</code> 和 CPU 信息。<code>--list</code> 不会运行测试。</p>
+<h2>3. 启动方式</h2>
+<p>单文件版直接从「终端」运行即可；下文的命令行示例适用于所有测试方式。</p>
+<blockquote><p>标准测试在核心数较多的 Mac 上会运行很久。第一次使用建议先运行下面的“快速测试”。</p></blockquote>
+<h2>4. 命令行使用</h2>
+<h3>4.1 查看 CPU</h3>
+<pre><code>./CoherencyLatency --list</code></pre>
+<h3>4.2 快速测试</h3>
+<pre><code>./CoherencyLatency --yes --cpus 2 --iterations 100000 --runs 3</code></pre>
+<p>只使用 2 个逻辑槽位，适合先确认程序能运行和观察大致延迟。</p>
+<h3>4.3 标准测试</h3>
+<pre><code>./CoherencyLatency --yes</code></pre>
+<p>默认参数是每个线程 1,000,000 次操作、每个核心对 10 runs。核心数越多，耗时增长很快；可以随时按 <code>Ctrl+C</code> 停止。</p>
+<h3>4.4 owned 模式</h3>
+<pre><code>./CoherencyLatency --yes --mode owned --cpus 2 --iterations 100000 --runs 3</code></pre>
+<p><code>bounce</code> 模式让两个线程竞争同一条 cache line；<code>owned</code> 模式让两个线程各自写自己的 cache line，再读取对方的 line。</p>
+<h3>4.5 指定 CSV 路径</h3>
+<pre><code>./CoherencyLatency --yes --csv result.csv</code></pre>
+<p>不指定时，默认写入当前目录的：</p>
+<pre><code>core_latencies_YYYYMMDD_HHMMSS.csv</code></pre>
+<h3>4.6 兼容原版位置参数</h3>
+<pre><code>./CoherencyLatency 1000000 bounce
+./CoherencyLatency 1000000 owned</code></pre>
+<h2>5. 输出格式</h2>
+<h3>5.1 终端显示</h3>
+<p>终端输出是逗号分隔的矩阵，对角线为 <code>x</code>：</p>
+<pre><code>x,123.456789
+123.456789,x</code></pre>
+<h3>5.2 CSV 文件</h3>
+<p>CSV 与原版 v1.0.5 一致：</p>
+<ul><li>文件名：<code>core_latencies_YYYYMMDD_HHMMSS.csv</code></li><li>分隔符：分号 <code>;</code></li><li>第一行：<code>;Core 0;Core 1...</code></li><li>每一行：<code>Core i;值;值...</code></li><li>对角线：<code>x</code></li><li>数值按原版 <code>defaultfloat</code> 精度 6 输出</li></ul>
+<p>原版输出的是 <strong>CSV，不是 XLSX</strong>。CSV 可以直接用 Excel 或 Numbers 打开，也可以在 Excel 中另存为 <code>.xlsx</code>；程序本身不生成 xlsx。</p>
+<h2>6. 参数表</h2>
+<table><thead><tr><th>参数</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>-i, --iterations N</code></td><td>每个线程的成功操作次数，默认 1,000,000</td></tr>
+<tr><td><code>-r, --runs N</code></td><td>每个核心对的采样次数，默认 10</td></tr>
+<tr><td><code>-m, --mode MODE</code></td><td>测试模式：<code>bounce</code>（默认）或 <code>owned</code></td></tr>
+<tr><td><code>--cpus N</code></td><td>最多使用 N 个逻辑槽位；不保证绑定到对应物理核心</td></tr>
+<tr><td><code>--perf-only</code></td><td>按 <code>perflevel0</code> 数量限制逻辑槽位；不保证线程实际落在 P 核</td></tr>
+<tr><td><code>--csv PATH</code></td><td>指定 CSV 输出路径</td></tr>
+<tr><td><code>-y, --yes</code></td><td>跳过测试前后的 Enter 提示</td></tr>
+<tr><td><code>--no-progress</code></td><td>禁用进度条</td></tr>
+<tr><td><code>--no-affinity</code></td><td>关闭 best-effort affinity/QoS 设置</td></tr>
+<tr><td><code>--list</code></td><td>打印 CPU 信息后退出</td></tr>
+<tr><td><code>-h, --help</code></td><td>显示帮助</td></tr>
+<tr><td><code>--version</code></td><td>显示版本</td></tr>
+</tbody></table>
+<h2>7. 结果解读与限制</h2>
+<ul><li>本移植测量的是两个线程之间的 <strong>cache-line 一致性延迟样本</strong>，不是严格的核心对拓扑矩阵。</li><li>矩阵的行列号只是逻辑槽位，不能解释为“物理 Core 0 到 Core 1”的延迟。</li><li>macOS 调度器可能迁移线程，尤其是 P 核与 E 核之间；同一台 Mac 上不同次运行也可能有差异。</li><li>不要直接把 macOS 的数值和 Windows 原版数值比较；平台和调度模型不同。</li><li>想获得相对稳定的对比：连接电源、关闭其他应用、避免热降频，并固定 <code>--cpus</code> 和 <code>--perf-only</code> 的组合。</li></ul>
+<h2>8. 性能与内存</h2>
+<p>本移植在保持命令行参数、测试次数、统计方式和输出格式完全不变的前提下，降低了运行开销和内存占用：</p>
+<ul><li><strong>矩阵内存由 O(n² × runs) 降到 O(n²)</strong>：原版会把每个核心对、每次 run 的原始样本全部存进内存，最后再求最小值；现在每得到一个样本就与当前最小值比较并保留较小者，只保留最终的 <code>n × n</code> 最小延迟矩阵。以 32 个逻辑槽位、10 次 run 为例，样本内存从约 40 KB 降为固定的 4 KB（<code>32 × 32 × 4</code> 字节），并且不再随 <code>--runs</code> 增长；槽位越多、run 越多，节省越明显。</li><li><strong>没有堆分配</strong>：采样用的 cache-line 单元改为栈上对象，<code>bounce</code> 和 <code>owned</code> 两种模式都不再使用 <code>new</code>/<code>make_unique</code>，整个程序没有显式的动态内存分配。</li><li><strong>参数只读传递</strong>：矩阵计算以 <code>const Options&amp;</code> 接收配置，避免重复拷贝。</li><li><strong>输出完全不变</strong>：CSV 的列顺序、对角线 <code>x</code>、6 位有效数字精度与原版一致；调大 <code>--runs</code> 只会让采样更久，内存占用不再增加。</li></ul>
+<blockquote><p>说明：减小 <code>--iterations</code> 或 <code>--runs</code> 会直接缩短运行时间，那属于测量本身的耗时，不是额外开销。程序常驻内存只有几 MB，长时间测试也不会持续增长。</p></blockquote>
+<h2>9. 常见问题</h2>
+<h3>提示“Permission denied”</h3>
+<pre><code>chmod +x CoherencyLatency</code></pre>
+<h3>提示“cannot be opened because the developer cannot be verified”</h3>
+<p>按 2.2 节执行 <code>xattr</code>，或在 Finder 中右键选择“打开”。</p>
+<h3>提示“bad CPU type in executable”</h3>
+<p>说明当前系统版本低于本程序的最低要求（Intel Mac 需 macOS 10.7+，Apple Silicon Mac 需 macOS 11.0+），或者文件下载不完整/架构识别异常。本程序是 Universal 2 单文件，同时包含 x86_64 和 arm64。</p>
+<h3>程序被系统杀掉</h3>
+<p>尝试重新签名：</p>
+<pre><code>codesign --force --deep --sign - CoherencyLatency</code></pre>
+<h3>测试运行太久</h3>
+<p>按 <code>Ctrl+C</code> 停止，改用：</p>
+<pre><code>./CoherencyLatency --yes --cpus 2 --iterations 100000 --runs 3</code></pre>
+<h3>想确认文件没有损坏</h3>
+<pre><code>shasum -a 256 CoherencyLatency</code></pre>
+<p>把输出与 <code>SHA256SUMS</code> 中的值比较。</p>
+<h2>10. 卸载</h2>
+<p>直接删除整个文件夹即可。程序不会写入系统目录，也不会安装后台服务；CSV 文件默认写在当前运行目录。</p>
+<h2>11. 源码与构建</h2>
+<p>源码、CMake 构建文件和开发说明在单独的源码包中。需要用 Xcode Command Line Tools 构建时，参见源码包里的 <code>README.md</code>。</p>
+</body>
+</html>
