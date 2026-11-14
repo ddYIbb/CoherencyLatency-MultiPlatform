@@ -22,7 +22,7 @@ The latest release is [v1.0.0](https://github.com/ddYIbb/CoherencyLatency-MultiP
 
 The macOS download is a zip containing a Universal 2 executable. It runs natively on Intel and Apple Silicon. If Gatekeeper blocks the first launch, right-click the file and choose **Open**, or remove the quarantine attribute with `xattr -dr com.apple.quarantine CoherencyLatency`.
 
-The Windows download is a single `.exe` for every architecture: it detects the host CPU, runs the matching x64 / x86 / ARM64 build, and deletes the temporary payload when it exits. No installer, nothing written to the registry, static CRT, and no Visual C++ runtime required. It runs on Windows Vista SP2 and later; ARM64 requires Windows 10/11 on ARM64. The first launch of a freshly downloaded file may take a few seconds while Windows Defender scans it.
+The Windows download is a single `.exe` for every architecture: it detects the host CPU, runs the matching x64 / x86 / ARM64 build, and deletes the temporary payload when it exits. No installer, nothing written to the registry, static CRT, and no Visual C++ runtime required. It runs on Windows Vista SP2 and later; ARM64 requires Windows 10/11 on ARM64. The first launch of a freshly downloaded file may take up to a few tens of seconds while Windows Defender scans it.
 
 Chinese documentation is available for both platforms: [macOS 使用手册](docs/使用手册.md) ([PDF](docs/使用手册.pdf)) and [Windows 使用说明](docs/Windows-使用说明.md).
 
