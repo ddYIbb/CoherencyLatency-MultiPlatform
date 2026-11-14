@@ -1,4 +1,4 @@
-// CoherencyLatency single-file launcher for Windows x86 / x64 / ARM64.
+// CoherencyLatency single-file launcher for Windows.
 // Embeds the three native builds as RCDATA and starts the matching one.
 
 #define WIN32_LEAN_AND_MEAN

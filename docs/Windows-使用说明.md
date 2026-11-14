@@ -1,16 +1,15 @@
 # CoherencyLatency Windows 使用说明
 
 **版本：** 1.0.0（对应 MicroBenchX 1.0.5）  
-**适用平台：** Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11；ARM64 版需要 Windows 10/11 on ARM64。
+**适用平台：** Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11。
 
 ## 1. 文件说明
 
-Release 中的 `CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe` 是一个单文件启动器。它内部嵌入了 x86、x64 和 ARM64 三份原生程序，启动时自动识别当前 CPU，释放匹配的版本到临时目录运行，退出后自动删除临时文件。
+Release 中的 `CoherencyLatency-Windows-v1.0.0.exe` 是一个单文件启动器。它内部嵌入了适用于不同 Windows 系统的原生程序，启动时自动选择并释放匹配当前系统的版本到临时目录运行，退出后自动删除临时文件。
 
 - 不需要安装，不写注册表。
-- 三份 payload 都静态链接 CRT，不需要另行安装 Visual C++ 运行库。
-- x86 版可以在 64 位 Windows 上通过 WOW64 运行。
-- ARM64 版只能在 Windows on ARM 上原生运行；在 x64 机器上会自动选择 x64 版。
+- 内置程序都静态链接 CRT，不需要另行安装 Visual C++ 运行库。
+- 自动适配当前 Windows 系统，不需要手动选择版本。
 
 ## 2. 首次运行
 
@@ -18,7 +17,7 @@ Release 中的 `CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe` 是一个单�
 2. 双击运行，或在“命令提示符 / PowerShell”中执行：
 
 ~~~bat
-CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe --list
+CoherencyLatency-Windows-v1.0.0.exe --list
 ~~~
 
 `--list` 只打印 CPU 信息，不运行测试。
@@ -33,7 +32,7 @@ CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe --list
 | `-r, --runs N` | 每个有序 CPU 对的采样次数，默认 10。 |
 | `-m, --mode MODE` | `bounce`（同一缓存行，默认）或 `owned`（各自独立的缓存行）。 |
 | `--cpus N` | 最多使用 N 个逻辑槽位，默认使用全部逻辑 CPU。 |
-| `--perf-only` | 在 Apple Silicon 上限制逻辑槽位；Windows 版无影响。 |
+| `--perf-only` | 在支持的 Mac 上限制逻辑槽位；Windows 版无影响。 |
 | `--csv PATH` | CSV 输出路径，默认在当前目录生成 `core_latencies_<时间>.csv`。 |
 | `-y, --yes` | 测试前后不等待回车。 |
 | `--no-progress` | 关闭进度条。 |
@@ -45,13 +44,13 @@ CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe --list
 示例：
 
 ~~~bat
-CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
+CoherencyLatency-Windows-v1.0.0.exe --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
 ~~~
 
 也可以使用原版的位置参数写法：
 
 ~~~bat
-CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe 1000000 bounce
+CoherencyLatency-Windows-v1.0.0.exe 1000000 bounce
 ~~~
 
 ## 4. CSV 输出
