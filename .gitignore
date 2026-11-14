@@ -1,27 +1,36 @@
-# macOS build outputs
+# Build trees
 /build/
 /build-*/
-/CMakeFiles/
-/CMakeCache.txt
+/tools/launcher/build/
+/tools/launcher/build-*/
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.vcxproj
+*.vcxproj.filters
+*.slnx
+*.sln
+*.tlog
+*.recipe
+*.obj
+*.res
+*.ilk
+*.pdb
 
-# Windows build outputs
+# Windows payloads and launcher output
 /windows/x86/
 /windows/x64/
 /windows/ARM64/
-/windows/launcher/*.obj
-/windows/launcher/*.res
-/windows/launcher/launcher.exe
-*.obj
-*.pdb
-*.ilk
+/tools/launcher/payload_*.exe
 
-# Keep Windows payloads under windows/launcher
-!/windows/launcher/payload_x86.exe
-!/windows/launcher/payload_x64.exe
-!/windows/launcher/payload_arm64.exe
-
-# Runtime output
+# Runtime leftovers
 core_latencies_*.csv
 *.csv
+*.log
+
+# IDE
+.vs/
+.vscode/
+*.user
 .DS_Store
 Thumbs.db

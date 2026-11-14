@@ -1,10 +1,10 @@
 # Windows 构建说明
 
-本目录包含 `CoherencyLatency` 的 Windows 原生 payload 源码和单文件 launcher 源码。
+本目录包含 `CoherencyLatency` 的 Windows 原生 payload 源码。单文件启动器在 [`tools/launcher`](../tools/launcher/CMakeLists.txt)。
 
-## 1. 构建三个原生 payload
+## 构建三个原生 payload
 
-在 `windows/src` 目录打开命令行，确保已安装 Visual Studio 的 C++ 桌面开发工具，然后运行：
+在 `windows\src` 目录打开命令行，确保已安装 Visual Studio 的 C++ 桌面开发工具，然后运行：
 
 ```bat
 build.bat x86
@@ -20,23 +20,23 @@ build.bat arm64
 
 如果 Visual Studio 不在默认路径，请设置 `VSINSTALL` 环境变量后重试。
 
-## 2. 构建单文件 launcher
+## 构建单文件启动器
 
-把三个 payload 复制到 `windows/launcher`：
+三个 payload 构建完成后，在仓库根目录运行：
 
-```text
-windows/launcher/payload_x86.exe
-windows/launcher/payload_x64.exe
-windows/launcher/payload_arm64.exe
+```bash
+cmake -S tools/launcher -B tools/launcher/build -A Win32
+cmake --build tools/launcher/build --config Release
 ```
 
-然后在该目录运行：
+如果 CMake 的 Visual Studio 生成器找不到编译器，可以在 Visual Studio 开发者命令提示符中改用 Ninja：
 
-```bat
-build_launcher.bat
+```bash
+cmake -S tools/launcher -B tools/launcher/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build tools/launcher/build
 ```
 
-生成的 `launcher.exe` 会按当前 Windows 架构自动选择 payload，运行结束后删除临时文件。
+生成的 `tools/launcher/build/CoherencyLatency.exe` 会按当前 Windows 架构自动选择 payload，运行结束后删除临时文件。
 
 ## 系统要求
 

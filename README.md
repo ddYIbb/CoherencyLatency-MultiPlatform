@@ -1,84 +1,128 @@
-# MicroBenchX CoherencyLatency 多平台移植版
+# CoherencyLatency-MultiPlatform
 
-[English](README_EN.md) | 中文
+English | [中文](README_CN.md)
 
-这是 [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX) 中 `CoherencyLatency.exe` 的原生 macOS / Windows 移植版。保留原版的两种测试模式、命令行参数和 CSV 输出格式，重新实现了线程、亲和性、计时和分发层。
+A multi-platform collection of ports of `CoherencyLatency`, the cache-coherency latency benchmark from [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX):
 
-> 非官方移植项目，与 CapFrameX / CXWorld 没有隶属或背书关系。原项目及其 `CoherencyLatency.cpp` 使用 MIT License，版权归 `Copyright (c) 2021 CapFrameX`。
+- **macOS Universal** — Universal 2 binary for Intel (macOS 10.7+) and Apple Silicon (macOS 11.0+)
+- **Windows x86 / x64 / ARM64** — single-file launcher for Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11, including Windows 10/11 on ARM64
 
-## 下载
+This repository contains the cross-platform source tree and publishes both builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases).
 
-最新 Release：[v1.0.0](https://github.com/ddYIbb/MicroBenchX-CoherencyLatency/releases/tag/v1.0.0)
+`CoherencyLatency` measures how long a cache line takes to move between two logical CPUs. Two worker threads repeatedly perform an atomic compare-and-swap on the same cache line (`bounce`) or write their own cache lines and read the other thread's line (`owned`). Every ordered pair of logical CPUs is measured, and the result is written as a semicolon-separated matrix.
 
-| 平台 | Release 文件 |
+## Download
+
+The latest release is [v1.0.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.0.0):
+
+| Platform | Release asset |
 |---|---|
-| macOS（Universal 2） | [CoherencyLatency-macOS-Universal-v1.0.0.zip](https://github.com/ddYIbb/MicroBenchX-CoherencyLatency/releases/download/v1.0.0/CoherencyLatency-macOS-Universal-v1.0.0.zip) |
-| Windows（x86 / x64 / ARM64） | [CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe](https://github.com/ddYIbb/MicroBenchX-CoherencyLatency/releases/download/v1.0.0/CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe) |
+| macOS Universal | [CoherencyLatency-macOS-Universal-v1.0.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.0.0/CoherencyLatency-macOS-Universal-v1.0.0.zip) |
+| Windows x86 / x64 / ARM64 | [CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.0.0/CoherencyLatency-Windows-x86-x64-ARM64-v1.0.0.exe) |
 
-两个平台都是单文件程序：macOS 是 Universal 2 可执行文件，Windows 是一个内嵌 x86/x64/ARM64 三个 payload 的启动器。
+The macOS download is a zip containing a Universal 2 executable. It runs natively on Intel and Apple Silicon. If Gatekeeper blocks the first launch, right-click the file and choose **Open**, or remove the quarantine attribute with `xattr -dr com.apple.quarantine CoherencyLatency`.
 
-## 系统要求
+The Windows download is a single `.exe` for every architecture: it detects the host CPU, runs the matching x64 / x86 / ARM64 build, and deletes the temporary payload when it exits. No installer, nothing written to the registry, static CRT, and no Visual C++ runtime required. It runs on Windows Vista SP2 and later; ARM64 requires Windows 10/11 on ARM64. The first launch of a freshly downloaded file may take a few seconds while Windows Defender scans it.
 
-- **macOS Intel**：macOS 10.7 Lion 或更高（x86_64）
-- **macOS Apple Silicon**：macOS 11.0 Big Sur 或更高（arm64）
-- **Windows x86 / x64**：Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11
-- **Windows on ARM64**：Windows 10 / 11 ARM64
+Chinese documentation is available for both platforms: [macOS 使用手册](docs/使用手册.md) ([PDF](docs/使用手册.pdf)) and [Windows 使用说明](docs/Windows-使用说明.md).
 
-macOS 版没有硬性 CPU 绑定能力，矩阵中的编号只是逻辑槽位，不是可靠的物理核心编号；需要严格 core-to-core 测量请使用原版 Windows 程序或 Linux 的 `taskset` 环境。
+## Relationship to the original
 
-## 功能
+This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` modes, the all-to-all matrix and the semicolon-separated CSV format come from [MicroBenchX](https://github.com/CXWorld/MicroBenchX) by CapFrameX (MIT); the threading, affinity, timing and packaging layers were rewritten.
 
-- 保留原版两种测试模式：
-  - `bounce`：两个线程竞争同一条 cache line 的 CAS；
-  - `owned`：两个线程分别写自己的 cache line，再读取对方的 line。
-- 保留原版 all-to-all 矩阵、分号分隔 CSV、默认文件名和 CLI 参数。
-- 修复原版统计代码中的 stray-semicolon 最小值 bug：现在取所有 run 的最小值，而不是最后一个 run。
-- 内存从 O(n² × runs) 降为 O(n²)，采样单元改为栈上对象，避免每个 run 的堆分配。
-- macOS 版使用 `mach_absolute_time`，Windows 版使用 `QueryPerformanceCounter`；两者都不依赖 `std::chrono` 的高版本系统符号。
+| | [MicroBenchX CoherencyLatency](https://github.com/CXWorld/MicroBenchX) | CoherencyLatency-MultiPlatform (this repository) |
+|---|---|---|
+| Platforms | Windows x64 (official v1.0.5 release) | macOS Universal 2, Windows x86 / x64 / ARM64 |
+| Timing | `QueryPerformanceCounter` | `mach_absolute_time` on macOS, `QueryPerformanceCounter` on Windows |
+| CPU affinity | Windows thread affinity | `SetThreadAffinityMask` on Windows; best-effort QoS hint on macOS |
+| Matrix memory | O(n² × runs) sample buffer | O(n²) matrix, online minimum, stack-allocated cache-line cells |
+| Build | Visual Studio solution | CMake for macOS, MSVC batch scripts for Windows |
 
-## 目录结构
+## What this port adds
+
+**Native macOS build.** The timing layer uses `mach_absolute_time`, which works back to macOS 10.7, instead of newer `std::chrono` symbols. The x86_64 slice targets macOS 10.7 and the arm64 slice targets macOS 11.0; the two are combined into one Universal 2 executable.
+
+**Windows single-file launcher.** The launcher embeds the x64, x86 and ARM64 payloads as resources. It detects the host architecture, extracts the matching payload to a temporary file, runs it, and removes it on exit. Releases are therefore one `.exe` rather than one archive per architecture.
+
+**ARM64 support.** The x86, x64 and ARM64 builds share the same source tree. The ARM64 payload is compiled natively with the MSVC ARM64 toolchain and runs without emulation on Windows on ARM.
+
+**Fixed minimum statistic.** The original source contains a stray semicolon in the minimum-selection loop, which makes the reported result depend on the last run rather than the fastest one. This port takes the minimum over every run, as intended.
+
+**Lower memory use.** The matrix is stored as one O(n²) float array. Each pair's minimum is updated online while runs execute, so no O(n² × runs) sample buffer is allocated; the two cache-line cells used by a pair live on the stack.
+
+**Preserved command line and output.** The original modes, option names, all-to-all matrix and semicolon-separated CSV output are unchanged. Existing scripts can keep using the same arguments and the default `core_latencies_<time>.csv` file name.
+
+**macOS scheduling caveat.** macOS does not allow hard CPU pinning. The port asks for a best-effort affinity/QoS hint, but the scheduler can still move threads between performance and efficiency cores. Matrix indices are logical slots, not verified physical core IDs.
+
+## Command line
+
+| Option | Meaning |
+|---|---|
+| `-i, --iterations N` | Successful lock operations per thread. Default: 1000000. |
+| `-r, --runs N` | Samples per ordered CPU pair. Default: 10. |
+| `-m, --mode MODE` | `bounce` (same cache line, default) or `owned` (separate lines). |
+| `--cpus N` | Use at most N logical slots. Default: all logical CPUs. |
+| `--perf-only` | On Apple Silicon, limit logical slots to the detectable perflevel0 count. |
+| `--csv PATH` | CSV output path. Default: `core_latencies_<time>.csv` in the current directory. |
+| `-y, --yes` | Do not wait for Enter before and after the test. |
+| `--no-progress` | Disable the progress bar. |
+| `--no-affinity` | Disable the best-effort affinity/QoS hint. |
+| `--list` | Print CPU information and exit. |
+| `-h, --help` | Show help. |
+| `--version` | Show version. |
+
+Example:
 
 ```text
-MicroBenchX-CoherencyLatency/
-├── src/main.cpp              # 跨平台 CoherencyLatency 源码
-├── CMakeLists.txt             # macOS CMake 工程
-├── scripts/build.sh           # macOS 构建脚本
-├── prebuilt/CoherencyLatency  # macOS Universal 2 预编译文件
-├── windows/
-│   ├── src/                   # Windows 原生 payload 源码与构建脚本
-│   └── launcher/              # 单文件 launcher 源码与 payload
-├── docs/                      # 中文使用手册（md/html/pdf）
-└── LICENSE
+./CoherencyLatency --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
 ```
 
-## 从源码构建
+The resulting CSV uses semicolons as separators and contains one row and one column per logical CPU slot.
+
+## Building
+
+Requirements:
+
+- macOS 10.7 or later on Intel, or macOS 11.0 or later on Apple Silicon
+- Xcode Command Line Tools
+- CMake 3.20 or newer
+- For Windows: Visual Studio 2022 or newer with the **Desktop development with C++** workload, plus CMake 3.20 or newer for the launcher
+
+No third-party libraries are needed; the project uses only the C++17 standard library and platform APIs.
 
 ### macOS
 
-需要 macOS 10.7+（Intel）或 11.0+（Apple Silicon）、Xcode Command Line Tools 和 CMake 3.20+：
+For Apple Silicon:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+git clone https://github.com/ddYIbb/CoherencyLatency-MultiPlatform.git
+cd CoherencyLatency-MultiPlatform
+
+cmake -S . -B build-arm64 -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-cmake --build build --config Release -j
+cmake --build build-arm64 --config Release -j
 ```
 
-Intel 构建把架构和部署目标改为：
+For Intel, use `x86_64` and deployment target `10.7`:
 
 ```bash
--DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.7
+cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.7
+cmake --build build-x86_64 --config Release -j
 ```
 
-也可以直接运行 `bash scripts/build.sh`。预编译文件可直接检查：
+To produce the Universal 2 binary shipped in Releases, build both configurations and combine them:
 
 ```bash
-chmod +x prebuilt/CoherencyLatency
-./prebuilt/CoherencyLatency --list
+lipo -create build-x86_64/coherency_latency build-arm64/coherency_latency \
+  -output CoherencyLatency
 ```
 
-### Windows
+`bash scripts/build.sh` builds the Apple Silicon configuration with the same CMake flags.
 
-在 `windows/src` 目录中运行（需要 Visual Studio 的 C++ 桌面开发工具）：
+### Windows payloads
+
+From `windows\src`, run:
 
 ```bat
 build.bat x86
@@ -86,12 +130,34 @@ build.bat x64
 build.bat arm64
 ```
 
-三个原生 payload 生成到 `windows/x86`、`windows/x64`、`windows/ARM64`。单文件 launcher 的构建方法见 [windows/README.md](windows/README.md)。
+The three payloads are written to `windows/x86/CoherencyLatency.exe`, `windows/x64/CoherencyLatency.exe` and `windows/ARM64/CoherencyLatency.exe`. The scripts use `/MT` and target Windows Vista SP2 for x86/x64 and Windows 10 for ARM64. If Visual Studio is installed somewhere else, set `VSINSTALL` to its installation directory.
 
-## 上游与许可证
+### Windows launcher
 
-- 上游：[CXWorld/MicroBenchX](https://github.com/CXWorld/MicroBenchX)，tag [v1.0.5](https://github.com/CXWorld/MicroBenchX/tree/v1.0.5)
-- 原始文件：[source/MicroBenchX.Icl/CoherencyLatency.cpp](https://github.com/CXWorld/MicroBenchX/blob/v1.0.5/source/MicroBenchX.Icl/CoherencyLatency.cpp)
-- 许可证：MIT，原版权声明 `Copyright (c) 2021 CapFrameX`；本项目是 derivative work，详见 [LICENSE](LICENSE)。
+`tools/launcher` embeds the three payloads as RCDATA resources. Configure it only after all three payloads above have been built, because the resource compiler reads them at configure time:
 
-本仓库只涉及 `CoherencyLatency`，不包含 `MicroBenchX.Ipc` 及其他 MicroBenchX 工具。
+```bash
+cmake -S tools/launcher -B tools/launcher/build -A Win32
+cmake --build tools/launcher/build --config Release
+```
+
+If the Visual Studio generator cannot find the compiler, use Ninja from a Visual Studio Developer Command Prompt instead:
+
+```bash
+cmake -S tools/launcher -B tools/launcher/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build tools/launcher/build
+```
+
+The result is `tools/launcher/build/CoherencyLatency.exe`, deliberately built as Win32 so the same file runs on every Windows machine: x86 and x64 natively, ARM64 through the built-in emulation layer.
+
+## Third-party components
+
+None. The port uses only the C++17 standard library and the platform APIs (`pthread` and Mach on macOS, Win32 on Windows). No external libraries need to be installed to build or run it.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
+Based on [MicroBenchX](https://github.com/CXWorld/MicroBenchX) by CapFrameX, licensed under the MIT Licence. The original copyright notice `Copyright (c) 2021 CapFrameX` is preserved in `LICENSE`.
+
+This repository covers `CoherencyLatency` only; `MicroBenchX.Ipc` and the other MicroBenchX tools are out of scope.
