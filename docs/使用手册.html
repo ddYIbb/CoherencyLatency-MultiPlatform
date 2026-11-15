@@ -119,6 +119,12 @@ xattr -dr com.apple.quarantine .</code></pre>
 <tr><td>32 / 50</td><td>4428 KB</td><td>4292 KB</td></tr>
 </tbody></table>
 <p>移植版稳定在 4.2 MB 左右，比原版低 60–150 KB，并且不随 <code>--runs</code> 增长；原版的工作集会随 run 数线性上升。</p>
+<h3>8.2 测量数值与原版的对齐情况</h3>
+<p>优化只降低整轮耗时和内存占用，不会改变测得的每操作延迟：测量窗口同样是"两个工作线程就绪后开始、跑完结束"，不包含线程创建，与原版 <code>ResumeThread</code> 前后取时间的做法一致。</p>
+<p>在同机交叉实测中（4 槽位、每 run 100 万次迭代、10 次 run，两个程序交替运行），移植版与原版源码重编译程序的矩阵数值差距在 0.1–2.4 ns 之间，且随会话波动——线程在处理器核心组之间迁移本身就会带来 ±2–3 ns 的漂移，噪声占主导，两边的单次 run 都能观察到 17→29 ns 的漂移带。</p>
+<p>数值上的少量差异来自两处刻意的修正，而不是开销优化：</p>
+<ul><li><strong>统计量</strong>：移植版取全部 run 的最小值；原版源码在最小值判断处多了一个分号，实际输出的是最后一次 run 的结果。原版输出的波动因此更大。</li><li><strong>计时精度</strong>：移植版用纳秒级高精度时钟（Windows <code>QueryPerformanceCounter</code>、macOS <code>mach_absolute_time</code>）；原版用毫秒级的 <code>ftime</code>，短测试的时间分辨率受限。</li></ul>
+<p>结论：与原版相比，输出只存在个位数纳秒级的抖动，属于测量噪声而非系统偏差；如果与原版的输出逐格对比，应以几纳秒的容差来比较。</p>
 <blockquote><p>说明：减小 <code>--iterations</code> 或 <code>--runs</code> 会直接缩短运行时间，那属于测量本身的耗时，不是额外开销。程序常驻内存只有几 MB，长时间测试也不会持续增长。</p></blockquote>
 <h2>9. 常见问题</h2>
 <h3>提示“Permission denied”</h3>

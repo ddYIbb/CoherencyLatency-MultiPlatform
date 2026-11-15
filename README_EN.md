@@ -53,6 +53,9 @@ This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` mo
 
 **Lower memory use.** The matrix is stored as one O(n²) float array. Each pair's minimum is updated online while runs execute, so no O(n² × runs) sample buffer is allocated; the two cache-line cells used by a pair live on the stack. At 32 slots and 50 runs the peak working set is 4292 KB versus 4428 KB for the original, which keeps growing with `--runs`.
 
+
+**Alignment of measured numbers with the original.** The optimisations reduce sweep time and memory use only; they do not change the way per-operation latency is measured. In same-machine interleaved comparisons against a rebuild of the original source (4 slots, 1,000,000 iterations per run, 10 runs), the matrices differ by 0.1–2.4 ns and vary between sessions — within environmental noise (thread migration between processor groups can drift readings by ±2–3 ns). The small residual differences come from two deliberate corrections: the statistic is the minimum over all runs (the original accidentally reports the last run due to a stray semicolon), and timing uses high-resolution clocks (the original uses millisecond-resolution `ftime`). Output is therefore expected to agree with the original only to within a few nanoseconds of jitter; this is measurement noise, not a systematic bias.
+
 **Preserved command line and output.** The original modes, option names, all-to-all matrix and semicolon-separated CSV output are unchanged. Existing scripts can keep using the same arguments and the default `core_latencies_<time>.csv` file name.
 
 **macOS scheduling caveat.** macOS does not allow hard CPU pinning. The port asks for a best-effort affinity/QoS hint, but the scheduler can still move threads between performance and efficiency cores. Matrix indices are logical slots, not verified physical core IDs.
