@@ -1,7 +1,7 @@
 # CoherencyLatency Windows 使用说明
 
 **版本：** 1.0.0（对应 MicroBenchX 1.0.5）  
-**适用平台：** Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11。
+**适用平台：** Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11（x86 / x64 / ARM64，单文件自动匹配；x86 / x64 最低 Vista SP2，ARM64 需 Windows 10；不需要任何 CPU 扩展指令集，不需要安装运行库）。
 
 ## 1. 文件说明
 

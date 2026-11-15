@@ -4,10 +4,27 @@
 
 [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX) 中 `CoherencyLatency` 缓存一致性延迟测试的多平台移植合集：
 
-- **macOS** — macOS 10.7 Lion 或更高版本
-- **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11
+- **macOS** — macOS 10.7 Lion 或更高版本（Intel 与 Apple Silicon 通用二进制）
+- **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11（x86 / x64 / ARM64）
 
 本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS 与 Windows 两个平台的成品。
+
+## 系统兼容性
+
+两个成品都不需要安装任何运行库，拷过去就能跑：
+
+| 平台 | 成品 | 最低系统 | 支持的 CPU / 指令集 |
+|---|---|---|---|
+| macOS | `CoherencyLatency-macOS-v1.0.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
+| Windows | `CoherencyLatency-Windows-v1.0.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+
+几点说明：
+
+- **不挑指令集。** 源码是纯 C++17，不使用 SSE/AVX/NEON 等扩展指令集，原子操作直接用各架构自带的原子指令，任何 x86、x64、ARM64 CPU 都能执行。
+- **不装运行库。** Windows 版静态链接 CRT；macOS 版只依赖系统自带的 `/usr/lib/libSystem.B.dylib`。
+- **兼容旧系统的方式。** macOS 版不依赖较新系统才有的 C++ 运行库符号，10.10+ 才有的 QoS API 通过运行时 `dlsym` 动态获取、老系统自动跳过；Windows 版链接 `SUBSYSTEM 6.0` 并静态链接 CRT。
+- **ARM64 Windows** 上单文件启动器（本身是 x86）通过系统内置的模拟层运行，内部的 ARM64 原生程序直接执行，不经过模拟。
+- **架构自适应，不用选版本。** macOS 一个文件双架构，Windows 一个文件三架构，复制过去即可；`--version` 和 `--list` 可用来确认程序在你的机器上正常启动。
 
 > 非官方移植项目，与 CapFrameX / CXWorld 没有隶属或背书关系。
 

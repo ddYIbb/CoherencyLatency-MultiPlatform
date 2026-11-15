@@ -4,10 +4,27 @@
 
 A multi-platform collection of ports of `CoherencyLatency`, the cache-coherency latency benchmark from [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX):
 
-- **macOS** — macOS 10.7 Lion or later
-- **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11
+- **macOS** — macOS 10.7 Lion or later (universal binary for Intel and Apple Silicon)
+- **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11 (x86 / x64 / ARM64)
 
 This repository contains the cross-platform source tree and publishes both builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases).
+
+## System compatibility
+
+Neither download requires installing any runtime — copy it over and it runs:
+
+| Platform | Release asset | Minimum OS | Supported CPUs / instruction sets |
+|---|---|---|---|
+| macOS | `CoherencyLatency-macOS-v1.0.0.zip` | Intel Mac: macOS 10.7 Lion (2011); Apple Silicon Mac: macOS 11.0 Big Sur (2020) | A single Universal 2 executable containing both x86_64 and arm64 slices (covers M1/M2/M3/M4); no need to pick a version |
+| Windows | `CoherencyLatency-Windows-v1.0.0.exe` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | A single-file launcher that auto-matches native x86, x64 and ARM64 payloads; the x86 build targets the plain 32-bit baseline (SSE2 not even required), x64/ARM64 use their base instruction sets |
+
+Notes:
+
+- **No instruction-set requirements.** The source is plain C++17 with no SSE/AVX/NEON intrinsics; atomics compile to each architecture's native atomic instructions, so any x86, x64 or ARM64 CPU works.
+- **No runtimes to install.** The Windows build links the CRT statically; the macOS build depends only on the system-provided `/usr/lib/libSystem.B.dylib`.
+- **How old systems are supported.** The macOS build avoids newer C++ runtime symbols, resolves the 10.10+ QoS API at runtime via `dlsym` (skipped on older systems), and links `SUBSYSTEM 6.0` with a static CRT on Windows.
+- **On ARM64 Windows** the launcher itself (x86) runs through the built-in emulation layer, while the embedded ARM64 payload executes natively.
+- **Architecture-adaptive, no version picking.** One file covers two macOS architectures; one file covers three Windows architectures. `--version` and `--list` confirm the program starts on your machine.
 
 > This is an unofficial port and is not affiliated with, or endorsed by, CapFrameX or CXWorld.
 
