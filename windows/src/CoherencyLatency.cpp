@@ -674,7 +674,15 @@ MatrixResult run_matrix(const Options& options, int n) {
     // n*n*runs floats and reduced them in a second pass; taking the minimum
     // online produces the same matrix while using about 'runs' times less
     // memory and avoiding a second full traversal.
+    // The original prints the bar once per row, which with many cores leaves it
+    // frozen for tens of seconds between updates.  Updating after every pair
+    // keeps the bar alive without changing what is measured.
     const bool owned_mode = options.mode == Mode::Owned;
+    const int total_pairs = n * n - n;
+    int done_pairs = 0;
+    if (options.progress) {
+        print_progress(0, total_pairs);
+    }
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
             if (i == j) {
@@ -683,10 +691,9 @@ MatrixResult run_matrix(const Options& options, int n) {
             result.filtered[matrix_index(n, i, j)] =
                 run_pair(i, j, options.iterations, options.runs, owned_mode,
                          options.use_affinity);
-        }
-
-        if (options.progress) {
-            print_progress(i + 1, n);
+            if (options.progress) {
+                print_progress(++done_pairs, total_pairs);
+            }
         }
     }
 
