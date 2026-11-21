@@ -109,6 +109,10 @@ struct ThreadConfig {
     int cpu_index = 0;
     int rounds = 1;
     bool use_affinity = true;
+    // Set by the worker itself: true when the requested placement was verified
+    // (or when no pinning was requested).  A pair whose workers could not be
+    // pinned is reported as N/A instead of as a number from the wrong core.
+    bool affinity_ok = false;
     StartGate* gate = nullptr;
 };
 
@@ -143,6 +147,9 @@ struct CpuInfo {
 
 struct MatrixResult {
     int n = 0;
+    // unpinned_pairs counts the core pairs whose workers could not be pinned
+    // to their requested processors; their cells hold NaN and print as N/A.
+    int unpinned_pairs = 0;
     std::vector<float> filtered;
 };
 
@@ -324,7 +331,8 @@ void print_cpu_info(const CpuInfo& info) {
     }
     std::printf("Cache line: %d bytes\n", info.cache_line);
 #if defined(_WIN32)
-    std::printf("Affinity: SetThreadAffinityMask (logical processor pinning)\n");
+    std::printf("Affinity: SetThreadAffinityMask (logical processor pinning, "
+                "verified)\n");
 #elif defined(__APPLE__)
     std::printf("Affinity: best-effort scheduler hint only "
                 "(macOS does not expose hard CPU pinning)\n");
@@ -337,7 +345,12 @@ void print_cpu_info(const CpuInfo& info) {
 // Thread setup
 // ---------------------------------------------------------------------------
 
-void configure_current_thread(int cpu_index, bool use_affinity) {
+void yield_current_thread();
+
+// Returns true when the requested placement was applied (or when no hard
+// pinning was requested).  macOS only has best-effort hints, so it always
+// reports success; Windows and Linux report a failure that becomes N/A.
+bool configure_current_thread(int cpu_index, bool use_affinity) {
 #if defined(__APPLE__)
     // Give benchmark workers the highest user QoS class.  QoS is not CPU
     // pinning, but it reduces the chance of an unrelated task preempting them.
@@ -366,7 +379,10 @@ void configure_current_thread(int cpu_index, bool use_affinity) {
     char name[32] = {};
     std::snprintf(name, sizeof(name), "cl-%d", cpu_index);
     pthread_setname_np(name);
+    // macOS has no hard pinning, so the placement is always "as requested".
+    return true;
 #elif defined(_WIN32)
+    bool ok = true;
     if (use_affinity) {
 #if defined(_WIN64)
         const std::uintptr_t mask =
@@ -375,20 +391,46 @@ void configure_current_thread(int cpu_index, bool use_affinity) {
         const std::uintptr_t mask =
             static_cast<std::uintptr_t>(1) << (cpu_index & 31);
 #endif
-        SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask));
+        // A zero return value means the mask was rejected (for example a
+        // processor group that the thread cannot use).  Verify the actual
+        // placement afterwards, because the mask alone is only a request.
+        ok = SetThreadAffinityMask(GetCurrentThread(),
+                                   static_cast<DWORD_PTR>(mask)) != 0;
+        if (ok) {
+            for (int attempt = 0; attempt < 64; ++attempt) {
+                if (GetCurrentProcessorNumber() ==
+                    static_cast<DWORD>(cpu_index)) {
+                    break;
+                }
+                yield_current_thread();
+            }
+            ok = GetCurrentProcessorNumber() == static_cast<DWORD>(cpu_index);
+        }
     }
+    return ok;
 #else
+    bool ok = true;
     if (use_affinity) {
         cpu_set_t set;
         CPU_ZERO(&set);
         if (cpu_index >= 0 && cpu_index < CPU_SETSIZE) {
             CPU_SET(cpu_index, &set);
-            pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+            ok = pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
+            if (ok) {
+                cpu_set_t actual;
+                CPU_ZERO(&actual);
+                ok = pthread_getaffinity_np(pthread_self(), sizeof(actual),
+                                            &actual) == 0 &&
+                     CPU_ISSET(cpu_index, &actual);
+            }
+        } else {
+            ok = false;
         }
     }
     char name[32] = {};
     std::snprintf(name, sizeof(name), "cl-%d", cpu_index);
     pthread_setname_np(pthread_self(), name);
+    return ok;
 #endif
 }
 
@@ -504,7 +546,8 @@ private:
     static void run(StartData* data) {
         ThreadConfig* config = data->config;
         StartGate* gate = config->gate;
-        configure_current_thread(config->cpu_index, config->use_affinity);
+        config->affinity_ok =
+            configure_current_thread(config->cpu_index, config->use_affinity);
         gate->ready.fetch_add(1, std::memory_order_acq_rel);
 
         for (int round = 0; round < config->rounds; ++round) {
@@ -541,11 +584,19 @@ private:
     StartData start_data_{};
 };
 
+// One core pair's result.  latency_ns is NaN when either worker could not be
+// pinned to its requested processor, which is reported as N/A instead of as a
+// number measured on the wrong core.
+struct PairOutcome {
+    float latency_ns = std::numeric_limits<float>::quiet_NaN();
+    bool affinity_ok = false;
+};
+
 // Runs all samples of one core pair and returns the fastest one, which is the
 // same statistic the original computed by storing n*n*runs values and taking
 // the minimum afterwards.
-float run_pair(int processor1, int processor2, std::uint64_t iterations,
-               std::uint64_t runs, bool owned_mode, bool use_affinity) {
+PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
+                     std::uint64_t runs, bool owned_mode, bool use_affinity) {
     // Separate 128-byte-aligned cells keep the two owners on distinct cache
     // lines on Apple Silicon (whose cache line is commonly 128 bytes).
     // Stack storage avoids two heap allocations per run.
@@ -638,7 +689,13 @@ float run_pair(int processor1, int processor2, std::uint64_t iterations,
 
     thread1.join();
     thread2.join();
-    return minimum;
+
+    PairOutcome outcome;
+    outcome.affinity_ok = config1.affinity_ok && config2.affinity_ok;
+    outcome.latency_ns = outcome.affinity_ok
+                             ? minimum
+                             : std::numeric_limits<float>::quiet_NaN();
+    return outcome;
 }
 // ---------------------------------------------------------------------------
 // Matrix
@@ -680,6 +737,7 @@ MatrixResult run_matrix(const Options& options, int n) {
     const bool owned_mode = options.mode == Mode::Owned;
     const int total_pairs = n * n - n;
     int done_pairs = 0;
+    int unpinned_pairs = 0;
     if (options.progress) {
         print_progress(0, total_pairs);
     }
@@ -688,9 +746,13 @@ MatrixResult run_matrix(const Options& options, int n) {
             if (i == j) {
                 continue;
             }
-            result.filtered[matrix_index(n, i, j)] =
+            const PairOutcome outcome =
                 run_pair(i, j, options.iterations, options.runs, owned_mode,
                          options.use_affinity);
+            result.filtered[matrix_index(n, i, j)] = outcome.latency_ns;
+            if (!outcome.affinity_ok) {
+                ++unpinned_pairs;
+            }
             if (options.progress) {
                 print_progress(++done_pairs, total_pairs);
             }
@@ -701,8 +763,11 @@ MatrixResult run_matrix(const Options& options, int n) {
         std::fputc('\n', stdout);
     }
 
+    result.unpinned_pairs = unpinned_pairs;
+
     // Same symmetry as the original: average each off-diagonal pair with its
-    // transpose.  The diagonal is already zero.
+    // transpose.  The diagonal is already zero.  Averaging with a NaN cell
+    // yields NaN, so an unpinned pair stays N/A in both directions.
     for (int i = 0; i < n; ++i) {
         for (int j = i + 1; j < n; ++j) {
             const float average =
@@ -726,9 +791,16 @@ void print_matrix(const MatrixResult& result) {
             if (i == j) {
                 std::fputc('x', stdout);
             } else {
-                // %.6f matches the original std::fixed << setprecision(6).
-                std::printf("%.6f", static_cast<double>(
-                                        result.filtered[matrix_index(result.n, i, j)]));
+                const float value =
+                    result.filtered[matrix_index(result.n, i, j)];
+                if (value != value) {
+                    // The pair could not be pinned, so there is no number that
+                    // belongs to the requested core pair.
+                    std::fputs("N/A", stdout);
+                } else {
+                    // %.6f matches the original std::fixed << setprecision(6).
+                    std::printf("%.6f", static_cast<double>(value));
+                }
             }
         }
         std::fputc('\n', stdout);
@@ -781,10 +853,15 @@ void write_csv(const std::string& path, const MatrixResult& result) {
             if (i == j) {
                 std::fputc('x', output);
             } else {
-                // %.6g matches the original std::defaultfloat << setprecision(6).
-                std::fprintf(output, "%.6g", static_cast<double>(
-                                                 result.filtered[matrix_index(
-                                                     result.n, i, j)]));
+                const float value =
+                    result.filtered[matrix_index(result.n, i, j)];
+                if (value != value) {
+                    std::fputs("N/A", output);
+                } else {
+                    // %.6g matches the original std::defaultfloat << setprecision(6).
+                    std::fprintf(output, "%.6g",
+                                 static_cast<double>(value));
+                }
             }
         }
         std::fputc('\n', output);
@@ -957,11 +1034,15 @@ void print_usage(const char* program) {
         "      --version        Show version\n\n");
     std::printf("%s", "Notes:\n"
         "  On Windows each worker is pinned to one logical processor with\n"
-        "  SetThreadAffinityMask.  The matrix indices are logical processor\n"
+        "  SetThreadAffinityMask and the placement is verified with\n"
+        "  GetCurrentProcessorNumber.  The matrix indices are logical processor\n"
         "  numbers, not verified physical core IDs.\n"
         "  For reproducible numbers, close other applications and use AC power.\n"
         "  Use x86 for 32-bit Windows, x64 for 64-bit Windows, and ARM64 for\n"
-        "  Windows on ARM.  The bundled .exe launcher selects the matching build.\n");
+        "  Windows on ARM.  The bundled .exe launcher selects the matching build.\n"
+        "  When a worker cannot be pinned to its requested processor, the\n"
+        "  affected cells are reported as N/A instead of as a number measured\n"
+        "  on the wrong core.\n");
 }
 
 bool stdout_is_tty() {
@@ -1066,6 +1147,12 @@ int main(int argc, char** argv) {
 
         std::printf("Latency matrix (ns per operation; diagonal x):\n");
         print_matrix(result);
+
+        if (result.unpinned_pairs > 0) {
+            std::printf("Warning: %d core pair(s) could not be pinned to the "
+                        "requested processors; those cells are N/A.\n",
+                        result.unpinned_pairs);
+        }
 
         const std::string csv_path =
             options.csv_path.empty() ? default_csv_name() : options.csv_path;

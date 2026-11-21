@@ -53,7 +53,7 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 |---|---|---|
 | 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows |
 | 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter` |
-| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask`；macOS 使用尽力而为的 QoS 提示 |
+| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask` 并用 `GetCurrentProcessorNumber` 校验落点；macOS 使用尽力而为的 QoS 提示 |
 | 线程 | 每次 run 都新建两个线程 | 每个核心对复用两个线程，逐轮同步 |
 | 矩阵内存 | O(n² × runs) 采样缓冲 | O(n²) 矩阵，在线取最小值，缓存行对象放在栈上 |
 | 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本 |
@@ -76,6 +76,8 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 **保留命令行和输出格式。** 原版的两种模式、参数名、全矩阵输出和分号 CSV 格式保持不变；原有脚本可以继续使用相同参数和默认的 `core_latencies_<time>.csv` 文件名。
 
 **macOS 调度限制。** macOS 不支持硬性 CPU 绑定。移植版会请求尽力而为的亲和性/QoS 提示，但调度器仍可能在性能核与能效核之间迁移线程。矩阵下标是逻辑槽位，不是经过验证的物理核心编号。
+
+**绑核失败显示 N/A。** Windows 版在绑定线程后会用 `GetCurrentProcessorNumber()` 复核线程实际落在哪个逻辑处理器上；如果系统（处理器组限制、虚拟机、容器、被其他程序占满的核心）拒绝了绑定，或者线程没能落到请求的核心，这一对核心的格子就写成 `N/A`，并在终端末尾打印一条警告，而不是把在错误核心上测到的数字当成结果。CSV 里同样是 `N/A`，可以直接看出哪些格不可信。macOS 本身没有硬绑定，所以 macOS 版不会出现 `N/A`。
 
 ## 命令行
 

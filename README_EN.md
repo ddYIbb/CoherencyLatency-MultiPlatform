@@ -53,7 +53,7 @@ This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` mo
 |---|---|---|
 | Platforms | Windows (official v1.0.5 release) | macOS, Windows |
 | Timing | `QueryPerformanceCounter` | `mach_absolute_time` on macOS, `QueryPerformanceCounter` on Windows |
-| CPU affinity | Windows thread affinity | `SetThreadAffinityMask` on Windows; best-effort QoS hint on macOS |
+| CPU affinity | Windows thread affinity | `SetThreadAffinityMask` plus a `GetCurrentProcessorNumber` check on Windows; best-effort QoS hint on macOS |
 | Threads | Two new threads per run | Two threads per pair, reused across runs |
 | Matrix memory | O(n² × runs) sample buffer | O(n²) matrix, online minimum, stack-allocated cache-line cells |
 | Build | Visual Studio solution | CMake for macOS, MSVC batch scripts for Windows |
@@ -76,6 +76,8 @@ This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` mo
 **Preserved command line and output.** The original modes, option names, all-to-all matrix and semicolon-separated CSV output are unchanged. Existing scripts can keep using the same arguments and the default `core_latencies_<time>.csv` file name.
 
 **macOS scheduling caveat.** macOS does not allow hard CPU pinning. The port asks for a best-effort affinity/QoS hint, but the scheduler can still move threads between performance and efficiency cores. Matrix indices are logical slots, not verified physical core IDs.
+
+**Unpinned pairs are reported as N/A.** On Windows each worker verifies its placement with `GetCurrentProcessorNumber()` after `SetThreadAffinityMask`. If the system rejects the mask (processor groups, virtual machines, containers, cores taken by another process) or the thread does not land on the requested processor, that pair's cells are written as `N/A` and a warning is printed after the matrix, instead of reporting a number measured on the wrong core. The CSV contains `N/A` in the same cells. macOS has no hard pinning, so the macOS build never emits `N/A`.
 
 ## Command line
 

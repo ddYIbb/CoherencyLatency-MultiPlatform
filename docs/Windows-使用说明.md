@@ -64,14 +64,36 @@ CoherencyLatency-Windows-v1.0.0.exe 1000000 bounce
 
 原版输出的是 **CSV，不是 XLSX**。可以直接用 Excel 或 Numbers 打开，也可以在 Excel 中另存为 `.xlsx`；程序本身不生成 xlsx。
 
-## 5. 结果解读与限制
+## 5. 绑核失败时显示 N/A
+
+Windows 版会真正把每个工作线程绑定到矩阵对应的逻辑处理器，并在绑定后用 `GetCurrentProcessorNumber()` 复核线程实际落在哪个核心上。如果系统拒绝了这次绑定，或者线程没有落到请求的核心，这一对核心的格子会写成 `N/A`，终端矩阵下方还会打印一条警告：
+
+~~~text
+x,22.376751,N/A,N/A
+22.376751,x,N/A,N/A
+N/A,N/A,x,N/A
+N/A,N/A,N/A,x
+Warning: 10 core pair(s) could not be pinned to the requested processors; those cells are N/A.
+~~~
+
+出现 `N/A` 的典型情况：
+
+- 程序被限制在部分处理器上运行（处理器组、`start /affinity`、任务管理器“设置相关性”、虚拟机或容器的 CPU 配额）。
+- 某些逻辑处理器被系统或驱动占用，线程无法落上去。
+- 在 Windows on ARM 或大小核机器上，调度器把线程留在了别的核上。
+
+`N/A` 的含义是“这一格没有可信的数字”，而不是“延迟为 0”。CSV 里同样是 `N/A`，Excel 会把它当文本显示。想拿到完整矩阵，可以放开处理器限制，或改用 `--cpus N` 缩小到实际可用的槽位后重跑。
+
+macOS 版没有硬绑定能力，所以不会出现 `N/A`，相关说明见 macOS 使用手册。
+
+## 6. 结果解读与限制
 
 - 矩阵下标是逻辑处理器编号，不一定等于物理核心编号。
-- Windows 版使用 `SetThreadAffinityMask` 把线程绑定到指定逻辑处理器；如果系统或虚拟机限制了亲和性，结果可能不稳定。
+- Windows 版使用 `SetThreadAffinityMask` 把线程绑定到指定逻辑处理器，并用 `GetCurrentProcessorNumber()` 校验；绑定失败的核心对显示 `N/A`。
 - 测量时建议关闭其他负载、连接电源，并避免热降频。
 - 不要把 Windows 与 macOS 的数值直接比较，平台和调度模型不同。
 
-## 6. 源码构建
+## 7. 源码构建
 
 源码和构建脚本说明见 [windows/README.md](../windows/README.md)。三个 payload 构建完成后，在仓库根目录构建单文件启动器：
 
