@@ -6,17 +6,20 @@
 
 - **macOS** — macOS 10.7 Lion 或更高版本（Intel 与 Apple Silicon 通用二进制）
 - **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11（x86 / x64 / ARM64）
+- **Android** — Android 4.1（API 16）或更高版本（命令行版四个 ABI；图形界面版为通用 APK）
 
-本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS 与 Windows 两个平台的成品。
+本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS、Windows 与 Android 三个平台的成品。
 
 ## 系统兼容性
 
-两个成品都不需要安装任何运行库，拷过去就能跑：
+这些成品都不需要安装任何运行库，拷过去就能跑：
 
 | 平台 | 成品 | 最低系统 | 支持的 CPU / 指令集 |
 |---|---|---|---|
-| macOS | `CoherencyLatency-macOS-v1.0.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
-| Windows | `CoherencyLatency-Windows-v1.0.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+| macOS | `CoherencyLatency-macOS-v1.1.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
+| Windows | `CoherencyLatency-Windows-v1.1.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+| Android（命令行） | `CoherencyLatency-Android-v1.1.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
+| Android（图形界面） | `CoherencyLatency-Android-UI-v1.1.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
 
 几点说明：
 
@@ -32,18 +35,22 @@
 
 ## 下载
 
-最新版本：[v1.0.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.0.0)
+最新版本：[v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0)
 
 | 平台 | Release 文件 |
 |---|---|
-| macOS | [CoherencyLatency-macOS-v1.0.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.0.0/CoherencyLatency-macOS-v1.0.0.zip) |
-| Windows | [CoherencyLatency-Windows-v1.0.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.0.0/CoherencyLatency-Windows-v1.0.0.exe) |
+| macOS | [CoherencyLatency-macOS-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-macOS-v1.1.0.zip) |
+| Windows | [CoherencyLatency-Windows-v1.1.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Windows-v1.1.0.exe) |
+| Android（命令行） | [CoherencyLatency-Android-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-v1.1.0.zip) |
+| Android（图形界面） | [CoherencyLatency-Android-UI-v1.1.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-UI-v1.1.0.apk) |
 
 macOS 版下载后解压得到一个可执行文件。如果首次打开被 Gatekeeper 拦截，请右键选择“打开”，或执行 `xattr -dr com.apple.quarantine CoherencyLatency` 清除隔离属性。
 
 Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows 匹配的原生程序，退出后删除临时释放的文件。不需要安装，不写注册表；静态链接 CRT，不需要安装 Visual C++ 运行库。支持 Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11。新下载的 exe 首次运行时，Windows Defender 可能会扫描几秒到几十秒，之后启动很快。
 
-详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）和 [Windows 使用说明](docs/Windows-使用说明.md)。
+Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件，适合 Termux 或 `adb shell`；图形界面版是单个 APK，手机、平板、圆形手表和 Android TV 通用。两者都支持 Android 4.1（API 16）及以上。
+
+详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）、[Windows 使用说明](docs/Windows-使用说明.md)、[Android 命令行使用手册](android/docs/使用手册.md)（[PDF](android/docs/使用手册.pdf)）和 [Android APK 使用说明](android/docs/APK使用说明.md)（[PDF](android/docs/APK使用说明.pdf)）。
 
 ## 与原项目的关系
 
@@ -51,18 +58,20 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 
 | | [MicroBenchX CoherencyLatency](https://github.com/CXWorld/MicroBenchX) | CoherencyLatency-MultiPlatform（本仓库） |
 |---|---|---|
-| 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows |
-| 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter` |
-| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask` 并用 `GetCurrentProcessorNumber` 校验落点；macOS 使用尽力而为的 QoS 提示 |
+| 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows、Android |
+| 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter`，Android 用 `clock_gettime(CLOCK_MONOTONIC)` |
+| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask` 并用 `GetCurrentProcessorNumber` 校验落点；Android 用 `sched_setaffinity` 并用 `sched_getcpu` 校验落点；macOS 使用尽力而为的 QoS 提示 |
 | 线程 | 每次 run 都新建两个线程 | 每个核心对复用两个线程，逐轮同步 |
 | 矩阵内存 | O(n² × runs) 采样缓冲 | O(n²) 矩阵，在线取最小值，缓存行对象放在栈上 |
-| 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本 |
+| 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本，Android 用 NDK r21e clang 脚本 |
 
 ## 本移植版新增的内容
 
 **原生 macOS 构建。** 计时使用 `mach_absolute_time`，从 macOS 10.7 起就可用，不依赖更高版本系统的 `std::chrono` 符号。发布的可执行文件兼容新旧 Mac。
 
 **Windows 单文件启动器。** 启动器把 Windows 原生程序作为资源嵌入同一个 exe。运行时释放匹配当前系统的程序到临时文件，执行完毕后删除。因此只需要一个可执行文件。
+
+**Android 原生移植。** 命令行版用 NDK r21e 交叉编译为 arm64-v8a、armv7、x86、x86_64 四个 ABI，32 位最低 Android 4.1（API 16）；图形界面版是同一个 APK 内含四个原生库，手机、平板、圆形手表和 Android TV 自动适配。Android 版同样使用 `sched_setaffinity` 绑定核心并用 `sched_getcpu` 复核，绑核失败的核心对显示 `N/A`。
 
 **修复最小值统计。** 原版源码在最小值判断循环里多了一个分号，导致结果实际取的是最后一次 run，而不是最快的 run。本移植版改为在所有 run 中取最小值。
 
@@ -112,6 +121,7 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 - Xcode Command Line Tools
 - CMake 3.20 或更高版本
 - Windows 需要 Visual Studio 2022 或更新版本，并勾选 **使用 C++ 的桌面开发** 工作负载；单文件启动器还需要 CMake 3.20 或更高版本
+- Android 需要 NDK r21e、Android SDK build-tools 31.0.0、platforms/android-31 和 JDK 17
 
 项目不依赖第三方库，只使用 C++17 标准库和平台 API。
 
@@ -174,6 +184,25 @@ cmake --build tools/launcher/build
 ```
 
 产物是 `tools/launcher/build/CoherencyLatency.exe`。它刻意按 Win32（x86）编译，这样同一个文件能在所有 Windows 机器上运行：x86 和 x64 原生执行，ARM64 通过系统内置的模拟层运行。
+
+### Android
+
+命令行版（四个 ABI）：
+
+```bash
+cd android
+python build_cli.py
+python make-android-zip.py
+```
+
+图形界面 APK（同一个 APK 内含四个 ABI）：
+
+```bash
+cd android/app
+python build_apk.py
+```
+
+`build_cli.py` 默认使用 `D:\ndk21\android-ndk-r21e`；`build_apk.py` 默认使用 `D:/AndroidTools` 下的 JDK 17 与 Android SDK，可通过 `JAVA_HOME`、`ANDROID_SDK_ROOT`、`ANDROID_NDK_ROOT` 覆盖。
 
 ## 第三方组件
 

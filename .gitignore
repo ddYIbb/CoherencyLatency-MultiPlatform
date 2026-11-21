@@ -34,3 +34,12 @@ core_latencies_*.csv
 *.user
 .DS_Store
 Thumbs.db
+
+# Android build trees and generated artifacts
+/android/build/
+/android/app/build/
+/android/app/art/
+/android/CoherencyLatency-Android-*.zip
+/android/CoherencyLatency-Android-UI-*.apk
+/CoherencyLatency-*.zip
+/CoherencyLatency-*.exe

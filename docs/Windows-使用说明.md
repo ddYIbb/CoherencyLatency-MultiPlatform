@@ -1,11 +1,11 @@
 # CoherencyLatency Windows 使用说明
 
-**版本：** 1.0.0（对应 MicroBenchX 1.0.5）  
+**版本：** 1.1.0（对应 MicroBenchX 1.0.5）  
 **适用平台：** Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11（x86 / x64 / ARM64，单文件自动匹配；x86 / x64 最低 Vista SP2，ARM64 需 Windows 10；不需要任何 CPU 扩展指令集，不需要安装运行库）。
 
 ## 1. 文件说明
 
-Release 中的 `CoherencyLatency-Windows-v1.0.0.exe` 是一个单文件启动器。它内部嵌入了适用于不同 Windows 系统的原生程序，启动时自动选择并释放匹配当前系统的版本到临时目录运行，退出后自动删除临时文件。
+Release 中的 `CoherencyLatency-Windows-v1.1.0.exe` 是一个单文件启动器。它内部嵌入了适用于不同 Windows 系统的原生程序，启动时自动选择并释放匹配当前系统的版本到临时目录运行，退出后自动删除临时文件。
 
 - 不需要安装，不写注册表。
 - 内置程序都静态链接 CRT，不需要另行安装 Visual C++ 运行库。
@@ -17,7 +17,7 @@ Release 中的 `CoherencyLatency-Windows-v1.0.0.exe` 是一个单文件启动器
 2. 双击运行，或在“命令提示符 / PowerShell”中执行：
 
 ~~~bat
-CoherencyLatency-Windows-v1.0.0.exe --list
+CoherencyLatency-Windows-v1.1.0.exe --list
 ~~~
 
 `--list` 只打印 CPU 信息，不运行测试。
@@ -44,13 +44,13 @@ CoherencyLatency-Windows-v1.0.0.exe --list
 示例：
 
 ~~~bat
-CoherencyLatency-Windows-v1.0.0.exe --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
+CoherencyLatency-Windows-v1.1.0.exe --cpus 8 --iterations 1000000 --runs 10 --mode bounce --yes
 ~~~
 
 也可以使用原版的位置参数写法：
 
 ~~~bat
-CoherencyLatency-Windows-v1.0.0.exe 1000000 bounce
+CoherencyLatency-Windows-v1.1.0.exe 1000000 bounce
 ~~~
 
 ## 4. CSV 输出

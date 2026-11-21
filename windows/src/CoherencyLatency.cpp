@@ -63,7 +63,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "1.0.5-compat";
+constexpr const char* kVersion = "1.1.0-compat";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are commonly 128 bytes; keep this a compile-time

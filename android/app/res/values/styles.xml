@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 4.1-4.4 fallback theme (Material does not exist before 5.0). -->
+    <style name="AppTheme" parent="@android:style/Theme.Holo.Light.NoActionBar">
+        <item name="android:windowBackground">#FFF4F6F9</item>
+    </style>
+</resources>

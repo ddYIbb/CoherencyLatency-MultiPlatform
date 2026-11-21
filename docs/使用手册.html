@@ -23,7 +23,7 @@
 </head>
 <body>
 <h1>CoherencyLatency macOS 使用手册</h1>
-<p><strong>版本：</strong> 1.0.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Intel（x86_64）Mac：macOS 10.7 Lion 或更高；Apple Silicon（arm64）Mac：macOS 11.0 或更高。主程序为 Universal 2 单文件。</p>
+<p><strong>版本：</strong> 1.1.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Intel（x86_64）Mac：macOS 10.7 Lion 或更高；Apple Silicon（arm64）Mac：macOS 11.0 或更高。主程序为 Universal 2 单文件。</p>
 <blockquote><p><strong>重要限制</strong>：macOS 不提供硬性 CPU 绑定。本工具<strong>不能保证</strong>测量“指定 core i ↔ core j”的核间延迟；矩阵中的 <code>i</code>/<code>j</code> 只是逻辑槽位，不是物理核心编号，也不保证线程落在指定的 P 核或 E 核上。若要测量严格的核心对延迟，请使用原版 Windows 程序，或 Linux 上支持 <code>taskset</code>/<code>sched_setaffinity</code> 的环境。</p></blockquote>
 <h2>1. 文件夹内容</h2>
 <pre><code>CoherencyLatency-macOS-Release/
@@ -44,7 +44,7 @@ xattr -dr com.apple.quarantine .</code></pre>
 <pre><code>codesign --force --deep --sign - CoherencyLatency</code></pre>
 <h3>2.3 先检查程序</h3>
 <pre><code>./CoherencyLatency --list</code></pre>
-<p>应看到 <code>CoherencyLatency 1.0.0</code> 和 CPU 信息。<code>--list</code> 不会运行测试。</p>
+<p>应看到 <code>CoherencyLatency 1.1.0</code> 和 CPU 信息。<code>--list</code> 不会运行测试。</p>
 <h2>3. 启动方式</h2>
 <p>单文件版直接从「终端」运行即可；下文的命令行示例适用于所有测试方式。</p>
 <blockquote><p>标准测试在核心数较多的 Mac 上会运行很久。第一次使用建议先运行下面的“快速测试”。</p></blockquote>

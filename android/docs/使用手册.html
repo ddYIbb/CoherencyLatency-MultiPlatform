@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoherencyLatency Android 使用手册</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 34px 28px 80px; line-height: 1.75; color: #1f2328; }
+  h1 { font-size: 2em; border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
+  h2 { margin-top: 2em; border-bottom: 1px solid #d8dee4; padding-bottom: .25em; }
+  h3 { margin-top: 1.4em; }
+  code { background: #f1f3f5; border-radius: 4px; padding: .12em .3em; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .9em; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 14px 16px; overflow: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 1em 0; padding: .7em 1em; border-left: 4px solid #d97706; background: #fff8eb; color: #5f3b00; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  a { color: #0969da; }
+  @media print { body { max-width: none; padding: 0; margin: 20mm; } a { color: #000; text-decoration: none; } pre, blockquote { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } }
+</style>
+</head>
+<body>
+<h1>CoherencyLatency Android 使用手册</h1>
+<p><strong>版本：</strong> 1.1.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Android 4.1（API 16）及以上，arm64-v8a / armeabi-v7a / x86 / x86_64 四种 ABI。   <strong>运行方式：</strong> 命令行程序（Termux 或 adb shell），没有图形界面，也不是 APK。</p>
+<blockquote><p><strong>重要限制</strong>：Android 的 <code>sched_setaffinity</code> 只是“请求”。big.LITTLE 调度器、cgroup 和厂商内核都可能覆盖掩码。 程序会<strong>校验</strong>绑定结果：每个线程在开始前用 <code>sched_getaffinity</code> 确认掩码、用 <code>sched_getcpu()</code> 确认自己真的落在目标 CPU 上， 每轮测量前后再复核一次。任何一个线程没绑住，这个核心对（含转置格）就写 <code>N/A</code>，不会拿错核上的数字冒充结果。 即使校验通过，矩阵里的 <code>i</code>/<code>j</code> 也只是逻辑槽位，不等于物理核心编号。</p></blockquote>
+<h2>1. 文件说明</h2>
+<pre><code>CoherencyLatency-Android-v1.1.0/
+├── CoherencyLatency-arm64-v8a      主流手机（64 位 ARM），推荐
+├── CoherencyLatency-armeabi-v7a    老设备（32 位 ARM），Android 4.1+
+├── CoherencyLatency-x86            32 位 x86 模拟器 / Atom 平板
+├── CoherencyLatency-x86_64         64 位 x86 模拟器 / Chromebook
+├── SHA256SUMS
+├── README.md
+└── LICENSE</code></pre>
+<p>四个文件都是独立可执行程序，只依赖 Android 自带的 <code>libc.so</code>、<code>libm.so</code>、<code>libdl.so</code>， C++ 运行库已静态链接进去，不需要 root，不需要安装任何依赖。</p>
+<h2>2. 怎么选版本</h2>
+<p>在手机上装个终端（Termux），或连上电脑用 adb，先看 ABI：</p>
+<pre><code>getprop ro.product.cpu.abi</code></pre>
+<table><thead><tr><th>输出</th><th>用哪个文件</th></tr></thead><tbody>
+<tr><td><code>arm64-v8a</code></td><td><code>CoherencyLatency-arm64-v8a</code></td></tr>
+<tr><td><code>armeabi-v7a</code> / <code>armeabi</code></td><td><code>CoherencyLatency-armeabi-v7a</code></td></tr>
+<tr><td><code>x86_64</code></td><td><code>CoherencyLatency-x86_64</code></td></tr>
+<tr><td><code>x86</code></td><td><code>CoherencyLatency-x86</code></td></tr>
+</tbody></table>
+<p>绝大多数 2016 年以后的手机都是 <code>arm64-v8a</code>。</p>
+<p>系统版本下限由 ABI 决定：32 位 ARM/x86 库按 <strong>API 16（Android 4.1）</strong> 编译， 64 位 ARM/x86_64 库按 <strong>API 21（Android 5.0）</strong> 编译——bionic 的 64 位 ABI 从 21 才开始有。 也就是说 Android 4.1~4.4 的老机器只能用 32 位那两个文件。</p>
+<h2>3. 用 Termux 运行（日常使用）</h2>
+<h3>3.1 安装 Termux</h3>
+<p>从 F-Droid 或 GitHub 安装 Termux（Google Play 上的版本已停止更新，不建议）。 不需要 <code>pkg install</code> 任何东西，程序自带全部依赖。</p>
+<h3>3.2 放文件并执行</h3>
+<p>把对应文件传到手机上（数据线、网盘、<code>scp</code> 都行），然后在 Termux 里：</p>
+<pre><code>mkdir -p ~/bin
+mv CoherencyLatency-arm64-v8a ~/bin/cl
+chmod +x ~/bin/cl
+~/bin/cl --list</code></pre>
+<p>看到 CPU 信息和 <code>Runtime: Android ARM64 (aarch64), native</code> 就说明能跑。</p>
+<h3>3.3 快速测试</h3>
+<pre><code>~/bin/cl --yes --cpus 2 --iterations 100000 --runs 2</code></pre>
+<p>只测 2 个逻辑槽位，手机上一两秒就能出结果，适合先确认可用。</p>
+<h3>3.4 完整矩阵</h3>
+<pre><code>~/bin/cl --yes --cpus 4 --iterations 200000 --runs 3</code></pre>
+<p>槽位数越多，耗时按 <code>n × (n−1)</code> 增长：4 槽 12 对、8 槽 56 对。8 核手机跑满全矩阵要几分钟， 而且会明显发热降频，建议先小规模试。</p>
+<h2>4. 用 adb 运行（调试用）</h2>
+<pre><code>adb push CoherencyLatency-arm64-v8a /data/local/tmp/cl
+adb shell chmod 755 /data/local/tmp/cl
+adb shell &quot;cd /data/local/tmp &amp;&amp; ./cl --list&quot;
+adb shell &quot;cd /data/local/tmp &amp;&amp; ./cl -y --cpus 2 -i 100000 -r 2&quot;</code></pre>
+<ul><li><code>/data/local/tmp</code> 是 adb 默认可写目录，普通应用看不见这里，适合临时压测。</li><li><strong>一定要先 <code>cd</code></strong>：<code>adb shell</code> 的初始目录是 <code>/</code>（只读），CSV 写不进去。</li></ul>
+<h2>5. 输出</h2>
+<h3>5.1 终端</h3>
+<pre><code>Mode: bounce; CPUs: 4; iterations: 50000; runs: 3
+Latency matrix (ns per operation; diagonal x):
+x,22.828999,19.089001,20.052500
+22.828999,x,20.779499,20.744999
+19.089001,20.779499,x,20.975498
+20.052500,20.744999,20.975498,x
+Latencies written to core_latencies_20261117_130015.csv</code></pre>
+<h3>5.2 CSV</h3>
+<p>与原版 v1.0.5 完全一致：分号分隔、首列 <code>Core i</code>、对角线 <code>x</code>、6 位有效数字。</p>
+<pre><code>;Core 0;Core 1;Core 2;Core 3
+Core 0;x;53.1748;50.1405;49.9725
+Core 1;53.1748;x;52.5533;53.0788</code></pre>
+<h3>5.3 绑核失败时显示 N/A</h3>
+<p>如果某个逻辑槽位绑不上（例如该 CPU 被下线、被 cgroup 排除，或厂商内核拒绝了掩码）， 这一对不会输出数字，而是写 <code>N/A</code>；其余核心对照常测量，程序正常结束（退出码 0）。</p>
+<p>下面是在模拟器上把 CPU3 下线后运行 <code>--cpus 4</code> 的真实输出：</p>
+<pre><code>Latency matrix (ns per operation; diagonal x):
+x,24.990000,24.657501,N/A
+24.990000,x,37.193748,N/A
+24.657501,37.193748,x,N/A
+N/A,N/A,N/A,x
+Warning: 6 core pair(s) could not be pinned to the requested processors; those cells are N/A.</code></pre>
+<p>CSV 里同样是 <code>N/A</code>：</p>
+<pre><code>;Core 0;Core 1;Core 2;Core 3
+Core 0;x;24.99;24.6575;N/A
+Core 1;24.99;x;37.1937;N/A
+Core 2;24.6575;37.1937;x;N/A
+Core 3;N/A;N/A;N/A;x</code></pre>
+<ul><li><code>N/A</code> <strong>不是 0，也不是“延迟很低”</strong>，它表示这一对没有测到可信数据，做统计时要剔除。</li><li>只是“结果里出现 N/A”不会让程序失败；只有用户按 Ctrl+C 或参数错误才会返回非 0。</li><li>想避免 N/A，可以放开对 CPU 的限制（恢复被下线的核、调整 cgroup/cpuset），</li></ul>
+<p>  或缩小槽位数量，例如 <code>--cpus 3</code> 只用前三个槽位。</p>
+<ul><li>用 <code>--no-affinity</code> 时不做绑定、也就不会出现 N/A，但这时测的是调度器自由摆放的结果。</li></ul>
+<h3>5.4 CSV 写不进去怎么办</h3>
+<p>当前目录只读时（例如 <code>adb shell</code> 的 <code>/</code>），程序不会丢掉测量结果，而是自动改写到 <code>$TMPDIR</code> 或 <code>/data/local/tmp</code>，并在输出里注明真实路径：</p>
+<pre><code>Note: working directory is not writable (failed to open CSV file for writing: ...)
+Latencies written to /data/local/tmp/core_latencies_20261117_125613.csv</code></pre>
+<p>用 <code>--csv</code> 显式指定的路径不会回退——那种情况代表用户明确的意图，写不进去就直接报错。</p>
+<h2>6. 参数</h2>
+<table><thead><tr><th>参数</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>-i, --iterations N</code></td><td>每个线程的成功操作次数，默认 1,000,000</td></tr>
+<tr><td><code>-r, --runs N</code></td><td>每个核心对的采样次数，默认 10</td></tr>
+<tr><td><code>-m, --mode MODE</code></td><td><code>bounce</code>（默认，两个线程抢同一条 cache line）或 <code>owned</code>（各写各的 line 再读对方的）</td></tr>
+<tr><td><code>--cpus N</code></td><td>最多用 N 个逻辑槽位；不等于绑定到物理核</td></tr>
+<tr><td><code>--perf-only</code></td><td>Apple 专用，Android 上无效果（保留参数是为了命令行一致）</td></tr>
+<tr><td><code>--csv PATH</code></td><td>指定输出路径</td></tr>
+<tr><td><code>-y, --yes</code></td><td>跳过运行前后的 Enter 等待</td></tr>
+<tr><td><code>--no-progress</code></td><td>关闭进度条（管道重定向时自动关闭）</td></tr>
+<tr><td><code>--no-affinity</code></td><td>不请求绑核，比较调度器自由摆放时的差异</td></tr>
+<tr><td><code>--list</code></td><td>只打印 CPU 信息</td></tr>
+<tr><td><code>-h, --help</code></td><td>帮助</td></tr>
+<tr><td><code>--version</code></td><td>版本</td></tr>
+</tbody></table>
+<h2>7. 结果解读</h2>
+<ul><li>测的是<strong>两个线程之间的 cache-line 一致性延迟</strong>，不是核间拓扑的精确标定。</li><li>矩阵行列号是逻辑槽位；Android 上报的核编号还会被 cgroup 的 cpuset 重新编号。</li><li>手机会热降频：同样参数，先跑的几组数值往往比后面低。测对比要固定在电源模式、</li></ul>
+<p>  关掉后台应用，并在两组之间留出冷却时间。</p>
+<ul><li>矩阵里的 <code>N/A</code> 表示该核心对绑核失败、没有可信数字（见 5.3 节），统计时直接剔除。</li><li><code>--no-affinity</code> 与默认（请求绑核）的差别，可以粗略反映调度器把线程搬来搬去带来的影响。</li><li>不同手机之间的绝对数值不能直接比较，只能在同一台设备、同一状态下横向比参数。</li></ul>
+<h2>8. 常见问题</h2>
+<h3><code>No such file or directory</code>（脚本明明在）</h3>
+<p>说明 ABI 选错了。32 位系统不能跑 arm64 程序，反之亦然。用第 2 节的命令确认 ABI。</p>
+<p>注意还有一种情况：文件传过去但<strong>没有执行权限</strong>，也会报一样的错。</p>
+<pre><code>chmod +x CoherencyLatency-arm64-v8a</code></pre>
+<h3><code>Permission denied</code></h3>
+<p>同上，补 <code>chmod +x</code>，或换到 <code>/data/local/tmp</code> 再试。</p>
+<h3>测出来比电脑高很多</h3>
+<p>正常。手机 CPU 的核间一致性延迟、调度开销、降频都比桌面平台高；模拟器上更是几十到一百多 ns。 这个工具的价值是<strong>横向比较</strong>同一台设备的不同参数/模式，不是和 PC 比绝对值。</p>
+<h3>能不能跑满 8 核</h3>
+<p>可以，但很慢也很热。<code>--cpus</code> 不设就是全部逻辑槽位。建议从 2–4 开始。</p>
+<h3>会不会影响保修 / 需要 root</h3>
+<p>不需要 root，不写系统分区，不改任何系统设置。程序只在当前目录（或 <code>--csv</code> 指定处）生成一个 CSV。 删除文件即卸载。</p>
+<h2>9. 校验文件完整性</h2>
+<pre><code>sha256sum CoherencyLatency-arm64-v8a</code></pre>
+<p>与 <code>SHA256SUMS</code> 中的值比较。Termux 里没有 <code>sha256sum</code> 时可用 <code>toybox sha256sum</code> 或 <code>busybox sha256sum</code>。</p>
+<h2>10. 源码与构建</h2>
+<p>源码在 <code>Android-移植/</code> 目录（单一 <code>src/main.cpp</code> + <code>build_cli.py</code> + <code>make-android-zip.py</code>）。 构建用 <strong>NDK r21e</strong>（<code>D:/ndk21/android-ndk-r21e</code>），四个目标分别是 <code>aarch64-linux-android21</code>、<code>armv7a-linux-androideabi16</code>、<code>i686-linux-android16</code>、<code>x86_64-linux-android21</code>， 编译参数含 <code>-O3 -static-libstdc++ -s</code>，详见 <code>build_cli.py</code>。</p>
+</body>
+</html>

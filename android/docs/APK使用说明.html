@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoherencyLatency Android 图形界面版 · 使用说明</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 34px 28px 80px; line-height: 1.75; color: #1f2328; }
+  h1 { font-size: 2em; border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
+  h2 { margin-top: 2em; border-bottom: 1px solid #d8dee4; padding-bottom: .25em; }
+  h3 { margin-top: 1.4em; }
+  code { background: #f1f3f5; border-radius: 4px; padding: .12em .3em; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: .9em; }
+  pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 14px 16px; overflow: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 1em 0; padding: .7em 1em; border-left: 4px solid #d97706; background: #fff8eb; color: #5f3b00; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #d8dee4; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  a { color: #0969da; }
+  img { display: block; max-width: 380px; width: 100%; height: auto; margin: 1.2em auto; border: 1px solid #d8dee4; border-radius: 12px; }
+  img[src*="watch"] { max-width: 280px; }
+  img[src*="tablet"], img[src*="tv-"] { max-width: 720px; border-radius: 8px; }
+  hr { border: none; border-top: 1px solid #d8dee4; margin: 2em 0; }
+  @media print { body { max-width: none; padding: 0; margin: 14mm 16mm; } a { color: #000; text-decoration: none; } pre, blockquote, img, table { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } img { max-width: 300px; } img[src*="tablet"], img[src*="tv-"] { max-width: 620px; } }
+</style>
+</head>
+<body>
+<h1>CoherencyLatency Android 图形界面版 · 使用说明</h1>
+<p><strong>版本：</strong> 1.1.0（versionName <code>1.1.0-android-ui</code>，versionCode 4，2026-11-21 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.1.0.apk</code>（447,639 B / 437.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5）</p>
+<hr>
+<h2>1. 这是什么</h2>
+<p><code>CoherencyLatency</code> 测量一条缓存行在两个逻辑 CPU 之间来回传递需要多少纳秒。它来自 <a href="https://github.com/CXWorld/MicroBenchX">MicroBenchX v1.0.5</a> 的 <code>CoherencyLatency</code>，本 APK 是它的 Android 原生移植版， 测量核心用 C++ 写成（<code>libclbench.so</code>），外面套一层轻量 Java 界面：</p>
+<ul><li>参数固定为默认值（全部逻辑核心、1,000,000 次、3 轮、Bounce），点一下就开始；</li><li><strong>测量过程中实时显示进度和矩阵</strong>，不用等全部跑完；</li><li>随时可以停止，已测出的部分结果保留；</li><li>完成后自动保存 CSV，也可以点按钮<strong>手动导出</strong>到你选的位置；</li><li>某个核心对无法真正绑定时，矩阵和 CSV 显示 <strong>N/A</strong>，不会拿错 CPU 的数字冒充结果；</li><li>不联网、不申请任何权限、不需要 root、没有广告；</li><li>同一份 APK 在手机、平板、圆形手表和 Android TV 上都能用，不需要装不同版本；</li><li>系统要求低到 <strong>Android 4.1（API 16）</strong>，32 位 ARM、64 位 ARM、32 位 x86、64 位 x86 都有原生库。</li></ul>
+<p>界面长这样（手机模拟器截图）：</p>
+<p><img alt="手机主界面" src="screenshots/apk-01-home.png"></p>
+<hr>
+<h2>2. 安装</h2>
+<h3>2.1 手机 / 平板</h3>
+<p>任选一种方式把 APK 传到设备：</p>
+<ul><li>数据线：选「文件传输 / MTP」，把 APK 拷进「下载」目录；</li><li>网盘 / 微信文件传输助手 / 邮件附件：先存到设备，再从文件管理器打开；</li><li><code>adb install</code>（调试用）：</li></ul>
+<pre><code>adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<p>Android 4.1~7：设置 → 安全 → 允许「未知来源」（4.x 在「设置 → 安全 → 未知来源」）。</p>
+<p>Android 8 及以上：点开 APK 后系统会提示「为了安装此应用，请允许此来源」， 打开对应文件管理器/浏览器的开关，返回后继续安装即可。</p>
+<p>Android 4.1~4.4 上没有系统的「保存到…」文件选择器，<strong>导出 CSV…</strong> 按钮会直接把文件 存到应用私有目录并提示路径，取文件用数据线或 <code>adb pull</code>（见 6.5 节）。</p>
+<h3>2.2 Android TV / 电视盒子</h3>
+<p>电视通常没有文件管理器，推荐用 adb 安装：</p>
+<pre><code>adb connect 192.168.1.50:5555     # 电视开启「网络调试」后；USB 调试也可
+adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<p>装好后在电视的「应用」列表里会出现 <strong>CoherencyLatency</strong>（带 TV 横幅）。 部分品牌电视会限制第三方 APK，需要在开发者选项里允许「未知来源」或关闭安装校验。 电视没有触摸屏，全程用遥控器操作，见 3.4 节。</p>
+<h3>2.3 Wear OS 手表</h3>
+<p>手表用 adb 安装（先在手表开发者选项里开启「ADB 调试」，USB 或 Wi-Fi adb 均可）：</p>
+<pre><code>adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<p>APK 里已声明 <code>com.google.android.wearable.standalone = true</code>，可以独立运行。 部分手表系统对第三方 APK 有额外限制，装不上时请以实际系统提示为准。 圆形表盘的布局是按 454×454 圆形屏幕做的，见 3.3 节。</p>
+<h3>2.4 安装并打开</h3>
+<p>桌面出现蓝色矩阵图标 <strong>CoherencyLatency</strong>，点开即可。首次启动约 1 秒。</p>
+<blockquote><p>如果提示「应用未安装」或「签名不一致」：设备里可能装过另一份同包名 （<code>com.ddyibb.coherencylatency</code>）的测试包，先卸载旧的再装。 本 APK 使用 Android 调试证书签名，只用于本地测试分发，不上架应用商店。</p></blockquote>
+<h3>2.5 支持的系统与架构</h3>
+<table><thead><tr><th>项目</th><th>支持范围</th></tr></thead><tbody><tr><td>系统版本</td><td>Android 4.1（API 16）～ Android 15</td></tr><tr><td>32 位 ARM</td><td><code>armeabi-v7a</code>，Android 4.1+ 老手机、老电视盒子</td></tr><tr><td>64 位 ARM</td><td><code>arm64-v8a</code>，2015 年以后的主流手机/平板/电视</td></tr><tr><td>32 位 x86</td><td><code>x86</code>，老 Atom 平板、x86 模拟器</td></tr><tr><td>64 位 x86</td><td><code>x86_64</code>，x86 模拟器、Chromebook</td></tr></tbody></table>
+<p>安装时系统按设备的 ABI 自动挑选对应原生库，用户不需要选。四个 ABI 打包在同一个 APK 里， 所以文件比只带 arm64 的包大一些，但没有额外权限、没有额外依赖。</p>
+<p>Android 4.1 实测截图（480×800 模拟器，API 16）：</p>
+<p><img alt="Android 4.1 完成" src="screenshots/apk-16-android41.png"></p>
+<p>Android 4.1 上界面用的是系统自带的 Holo 主题（Android 5.0+ 自动换成 Material）， 功能、矩阵、CSV 与高版本完全一致。</p>
+<hr>
+<h2>3. 界面说明</h2>
+<h3>3.1 手机（竖屏单列）</h3>
+<p><img alt="手机主界面" src="screenshots/apk-01-home.png"></p>
+<p>从上到下：</p>
+<table><thead><tr><th>区域</th><th>内容</th></tr></thead><tbody><tr><td>设备信息</td><td>机型、逻辑核心数、缓存行大小、ABI。这些值由原生层读取，不是猜的。</td></tr><tr><td>固定参数</td><td>全部逻辑核心 · 1,000,000 次 · 3 轮 · Bounce。这一版不提供调节项，打开即可测。</td></tr><tr><td>开始测试 / 停止</td><td>开始后「停止」才可用；停止会保留已完成的部分结果。</td></tr><tr><td>进度行</td><td>例如「测量中 4/12 · C1↔C0 33.7 ns · 用时 4.8 s」；绑核失败时显示「C1↔C0 N/A（绑核失败）」。</td></tr><tr><td>结果矩阵</td><td>实时刷新，单位 ns/op；未测的格子显示 <code>·</code>，对角线显示 <code>x</code>，绑核失败显示 <code>N/A</code>。</td></tr><tr><td>导出 CSV…</td><td>手动选择保存位置（系统文件选择器）。</td></tr></tbody></table>
+<h3>3.2 平板 / 大屏横屏（两栏）</h3>
+<p>平板横放、宽度达到 600dp 时自动切成左右两栏：</p>
+<ul><li>左栏：标题、设备信息、开始/停止、进度、导出；</li><li>右栏：结果矩阵和说明文字。</li></ul>
+<p><img alt="平板两栏布局" src="screenshots/apk-07-tablet.png"></p>
+<p>平板竖放时仍是单列（与手机相同）。截图使用 1600×1000、160dpi 的模拟器配置， 真机平板上字号会按系统缩放，实际观感通常比截图更大。</p>
+<h3>3.3 圆形手表（紧凑滚动）</h3>
+<p>手表上首屏只放最常用的内容，保证 454×454 的圆形表盘内能看到开始按钮：</p>
+<pre><code>CoherencyLatency
+缓存一致性测试
+[ 开始测试 ] [ 停止 ]
+──────────────
+就绪 · 4 核 · 4×4 矩阵</code></pre>
+<p>设备信息、结果矩阵和导出按钮在下方，手指上下滑动查看。圆形预览图里圆外的黑色 只是截图遮罩，实际屏幕是圆的：</p>
+<p><img alt="手表就绪" src="screenshots/apk-08-watch-round.png"></p>
+<p><img alt="手表运行中" src="screenshots/apk-09-watch-running.png"></p>
+<p><img alt="手表完成" src="screenshots/apk-10-watch-done.png"></p>
+<p>矩阵在圆底会被自然截断，继续向上滑动就能看到完整的 4×4 矩阵和 <strong>导出 CSV…</strong> 按钮：</p>
+<p><img alt="手表导出按钮" src="screenshots/apk-11-watch-export.png"></p>
+<h3>3.4 Android TV（遥控器 / D-pad）</h3>
+<p>Android TV 上界面按 1.7 倍放大，并用左右两栏铺满 16:9 屏幕：</p>
+<p><img alt="TV 主界面" src="screenshots/apk-12-tv-home.png"></p>
+<p>遥控器操作：</p>
+<table><thead><tr><th>按键</th><th>作用</th></tr></thead><tbody><tr><td>方向键</td><td>在按钮之间移动焦点，当前焦点有蓝色描边/底色</td></tr><tr><td>确定 / OK</td><td>按下当前按钮（开始、停止或导出）</td></tr><tr><td>返回</td><td>关闭系统文件选择器，回到主界面</td></tr></tbody></table>
+<p>启动后焦点自动落在 <strong>开始测试</strong>；运行中自动落到 <strong>停止</strong>；跑完后自动落到 <strong>导出 CSV…</strong>。 所以最常见的流程只需要按两次「确定」：开始 → 等完成 → 导出。</p>
+<p><img alt="TV 运行中" src="screenshots/apk-13-tv-running.png"></p>
+<p><img alt="TV 完成" src="screenshots/apk-14-tv-done.png"></p>
+<blockquote><p>以上 TV/手表截图是在同一台手机模拟器上用调试参数切换形态后截的，分辨率和布局 与真实设备一致；真实电视的焦点样式、系统文件选择器外观可能略有不同。</p></blockquote>
+<hr>
+<h2>4. 做一次测试</h2>
+<p>参数固定为默认值（全部逻辑核心 / 100 万次 / 3 轮 / Bounce），直接点 <strong>开始测试</strong> 即可。</p>
+<p>运行中会看到实时进度和逐渐填满的矩阵：</p>
+<p><img alt="运行中" src="screenshots/apk-02-running.png"></p>
+<ul><li>4 核模拟器上 12 个核心对约 2.5~4 秒跑完（受系统负载影响）；核心越多耗时越长；</li><li>中途点 <strong>停止</strong>，已完成的格子会保留，标题变成「已停止 · 部分结果」；</li><li>跑完后标题变成「最终结果 · 双向平均 · ns/op」，并自动保存 CSV。</li></ul>
+<p><img alt="已停止" src="screenshots/apk-06-stopped.png"></p>
+<p><img alt="完成" src="screenshots/apk-03-finished.png"></p>
+<p>在手表上，开始按钮就在首屏；在电视上，按遥控器「确定」即可开始。</p>
+<hr>
+<h2>5. 结果怎么看</h2>
+<p><img alt="结果" src="screenshots/apk-03-finished.png"></p>
+<ul><li>单位是 <strong>ns/op</strong>：一次原子操作往返的延迟，<strong>越低越好</strong>；</li><li>矩阵是<strong>双向平均</strong>的：<code>C0</code> 行 <code>C1</code> 列和 <code>C1</code> 行 <code>C0</code> 列最终相同；</li><li>对角线是 <code>x</code>（自己到自己没有意义），没测的格子是 <code>·</code>；</li><li><code>N/A</code> 表示这个核心对<strong>绑核失败</strong>：至少一个线程没有真正待在请求的 CPU 上，数值不可用；</li></ul>
+<p>  它不是 0，也不是「延迟特别高」；</p>
+<ul><li>同一颗 SoC 上，Bounce 通常在几十纳秒；Owned 因为要跨两次缓存行，数值一般更高。</li></ul>
+<p>绑核失败时的矩阵长这样（这里把 CPU3 置为离线制造失败，C3 行列全部是 <code>N/A</code>，其余核心对照常出数）：</p>
+<p><img alt="绑核失败显示 N/A" src="screenshots/apk-15-na.png"></p>
+<p><strong>注意这不是「物理核心 i ↔ 物理核心 j」的精确延迟。</strong> Android 的 <code>sched_setaffinity</code> 可能被 cpuset、离线核心或厂商调度器拒绝。本次构建会检查实际 CPU，无法保持绑定的核心对在矩阵和 CSV 里写 <code>N/A</code>，其余核心对照常完成。 即使绑定成功，矩阵下标仍是<strong>逻辑槽位</strong>，适合横向对比同一台设备上的变化 （例如大小核差异、降频前后），不适合拿两个型号的设备直接比绝对值。</p>
+<hr>
+<h2>6. 保存与导出 CSV</h2>
+<h3>6.1 自动保存</h3>
+<p>每次跑完会自动保存一份到应用私有目录：</p>
+<pre><code>/sdcard/Android/data/com.ddyibb.coherencylatency/files/results/core_latencies_YYYYMMDD_HHMMSS.csv</code></pre>
+<p>界面底部会显示完整路径。卸载应用时这个目录会一起删除。</p>
+<h3>6.2 手动导出</h3>
+<ol><li>点 <strong>导出 CSV…</strong>（手表上先向下滑动找到它；电视上用方向键把焦点移过去）；</li><li>系统文件选择器里选目录（例如「下载 / Download」）；</li><li>文件名默认 <code>core_latencies_&lt;时间&gt;.csv</code>，可改；</li><li>点 <strong>SAVE</strong>，界面提示「已导出 CSV：文件名」。</li></ol>
+<p><img alt="选择保存位置" src="screenshots/apk-04-export-picker.png"></p>
+<p><img alt="导出完成" src="screenshots/apk-05-export-done.png"></p>
+<p>导出的文件与自动保存的那份内容完全相同（可用 SHA-256 比对）。导出不需要存储权限， 因为走的是系统 SAF 选择器。电视/手表上没有文件管理器时，选择器仍由系统提供。</p>
+<h3>6.3 取回电脑</h3>
+<ul><li>数据线 MTP：直接进「下载」目录复制；</li><li>或 adb：</li></ul>
+<pre><code>adb pull /sdcard/Download/core_latencies_20261120_131055.csv</code></pre>
+<h3>6.4 CSV 格式</h3>
+<p>分号分隔，第一行第一格为空，随后是 <code>Core 0</code> … <code>Core N-1</code>；对角线写 <code>x</code>：</p>
+<pre><code>;Core 0;Core 1;Core 2;Core 3
+Core 0;x;33.8422;34.914;34.1536
+Core 1;33.8422;x;32.401;31.998
+Core 2;34.914;32.401;x;30.775
+Core 3;34.1536;31.998;30.775;x</code></pre>
+<p>数值有效位数约 6 位（<code>%.6g</code>），与 macOS / Windows / CLI 版输出格式一致， 可直接用 Excel、Numbers、Python <code>pandas.read_csv(sep=';')</code> 打开。 若某个核心对绑核失败，该对的两个方向都写 <code>N/A</code>（CSV 里不是 0）。</p>
+<h3>6.5 Android 4.1~4.4 上的保存位置</h3>
+<p>这些老系统没有 SAF 文件选择器，也拿不到 <code>/sdcard/Android/data/...</code>，文件会写进应用私有目录：</p>
+<pre><code>/data/data/com.ddyibb.coherencylatency/files/results/core_latencies_YYYYMMDD_HHMMSS.csv</code></pre>
+<p>界面底部会显示这个完整路径。取回电脑用 adb（不需要 root）：</p>
+<pre><code>adb shell run-as com.ddyibb.coherencylatency cat files/results/core_latencies_20261121_091632.csv &gt; core_latencies.csv</code></pre>
+<p>或者先 <code>adb shell run-as com.ddyibb.coherencylatency ls files/results</code> 看有哪些文件。 在 4.x 上点 <strong>导出 CSV…</strong> 只是再存一份到同一目录并提示路径，不会弹文件选择器。</p>
+<h2>7. 默认参数与耗时</h2>
+<p>这一版固定使用默认参数：</p>
+<table><thead><tr><th>参数</th><th>固定值</th></tr></thead><tbody><tr><td>核心数</td><td>全部逻辑核心（设备报告多少就用多少）</td></tr><tr><td>迭代次数</td><td>每个线程每轮 1,000,000 次原子操作</td></tr><tr><td>采样轮数</td><td>3 轮，最终取最快的一轮</td></tr><tr><td>模式</td><td>Bounce 争用（两个线程抢同一条缓存行）</td></tr></tbody></table>
+<p>核心数是 <code>n</code> 时共有 <code>n × (n-1)</code> 个有序核心对：4 核 12 对（模拟器约 2.5~4 秒）， 8 核 56 对，12 核 132 对。核心越多耗时越长，手机发热或后台任务多时也会变慢。 需要中途结束就点 <strong>停止</strong>，已完成的格子会保留。 若某个核心当前离线（热插拔）或被系统 cpuset 排除，涉及它的核心对会显示 <code>N/A</code>， 其余核心对仍会跑完。</p>
+<hr>
+<h2>8. 常见问题</h2>
+<p><strong>Q：为什么没有核心数、迭代次数等选项？</strong> A：这一版固定使用默认参数（全部逻辑核心、100 万次、3 轮、Bounce），打开点开始即可，避免误调参数。</p>
+<p><strong>Q：数值每次都不一样。</strong> A：正常。设备有温控、后台任务、大小核迁移，同一台机器相邻两次差几纳秒很常见。 想对比就固定参数、连续测 3 次取中位数。</p>
+<p><strong>Q：为什么有格子是 N/A？</strong> A：这个核心对没有真正绑定成功。常见原因有：某个 CPU 正处于离线/热插拔状态、系统 cpuset 把应用限制在部分核心、厂商调度器拒绝或忽略了 <code>sched_setaffinity</code>、模拟器的 CPU 配置不完整。<code>N/A</code> 表示<strong>该对数值不可用</strong>，不是延迟高，也不是 0。其余核心对仍会 正常完成；在设备空闲、屏幕点亮、性能模式下重测，或换一台没有核限制的设备再试。 如果所有格子都是 <code>N/A</code>，说明当前进程拿不到任何一个请求的核心，通常是系统级限制。</p>
+<p><strong>Q：Bounce 和 Owned 差多少？</strong> A：Owned 一般明显更高，因为它有两次跨缓存行访问；具体倍数取决于 SoC 和缓存层级。 这一版 APK 固定 Bounce，不提供 Owned 切换。</p>
+<p><strong>Q：测到一半能停吗？</strong> A：可以。点「停止」后线程会退出，已完成的格子保留，标题显示「已停止 · 部分结果」。</p>
+<p><strong>Q：点导出没反应 / 保存失败。</strong> A：确认在系统文件选择器里选了目录并点了 SAVE；某些定制系统会二次确认。若仍失败， 用界面上的自动保存路径通过数据线取文件。</p>
+<p><strong>Q：安装被 Play Protect 拦截。</strong> A：这是调试签名的自编译应用，选择「仍要安装」即可；不放心可以自己从源码构建。</p>
+<p><strong>Q：需要 root 吗？需要联网吗？</strong> A：都不需要。APK 没有申请任何权限（包括网络权限）。</p>
+<p><strong>Q：模拟器上测的值能代表手机吗？</strong> A：不能。模拟器跑在 PC 上，缓存层级和调度都与真机不同，只适合验证功能。 真机数值才有参考意义。</p>
+<p><strong>Q：平板/电视上字太小或太大？</strong> A：布局按屏幕宽度和 dpi 自动切换：平板横屏两栏、电视 1.7 倍放大、手机单列。 不同厂商的系统字体缩放也会影响观感；电视上建议用遥控器靠近看。</p>
+<p><strong>Q：手表上找不到矩阵或导出按钮？</strong> A：手表首屏优先放开始/停止，矩阵和导出在下方；手指上下滑动即可，矩阵右侧和底部还可以继续滚。</p>
+<p><strong>Q：电视遥控器怎么开始？</strong> A：启动后焦点在「开始测试」，按遥控器中间的 OK/确定 即可；跑完后焦点会自动跳到「导出 CSV…」。</p>
+<p><strong>Q：手表/电视怎么安装？</strong> A：两者都推荐 <code>adb install</code>，见 2.2 / 2.3 节。电视需要在开发者选项允许未知来源， 手表需要开启 ADB 调试。</p>
+<p><strong>Q：为什么手表预览图四角是黑的？</strong> A：那是圆形遮罩预览图，黑色部分不在真实屏幕内；真机是完整圆形表盘。</p>
+<p><strong>Q：这个 APK 支持横屏吗？</strong> A：支持。手机/平板旋转后按新宽度重新布局；平板横屏会自动切成左右两栏。</p>
+<p><strong>Q：和命令行版有什么区别？</strong> A：测量核心、参数含义、CSV 格式完全相同；APK 只是多了一层图形界面和实时显示。 命令行版（Termux/adb）仍在 <code>03-Android-arm64-armv7-x86-x86_64</code> 文件夹里，适合脚本化批量跑。</p>
+<hr>
+<h2>9. 资源占用</h2>
+<p>以模拟器（4 核 / 100 万 / 3 轮 / Bounce）跑完后的 <code>dumpsys meminfo</code> 为例：</p>
+<table><thead><tr><th>项目</th><th>数值</th></tr></thead><tbody><tr><td>Native Heap Pss</td><td>16,232 KB（约 15.9 MiB）</td></tr><tr><td>Dalvik Heap Pss</td><td>1,446 KB（约 1.4 MiB）</td></tr><tr><td>总 PSS</td><td>42,609 KB（约 41.6 MiB / 42.6 MB）</td></tr><tr><td>总 RSS</td><td>127,388 KB（约 124.4 MiB）</td></tr></tbody></table>
+<p>测量线程只在测试期间存在，跑完即回收；矩阵是 O(n²) 的浮点数组，4 核只有 16 个 float。 CSV 单文件约 150~200 字节（4 核）。上述数值会随系统版本、厂商定制和屏幕分辨率变化。</p>
+<hr>
+<h2>10. 校验、源码与构建</h2>
+<p>APK SHA-256：</p>
+<pre><code>fe4e174639f83fec12c3288fa91ed07e1ac33883a04a48c1bf681d4074e0cda4</code></pre>
+<p>设备上可用 Termux 校验：</p>
+<pre><code>sha256sum CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<p>源码在 <code>Android-移植/app/</code>：</p>
+<pre><code>app/
+├── AndroidManifest.xml
+├── build_apk.py              一键构建（无需 Gradle）
+├── java/.../MainActivity.java 界面、响应式布局与固定参数
+├── java/.../NativeBench.java  JNI 声明
+├── jni/clbench_jni.cpp       测量核心（bounce/owned、线程复用、O(n²) 矩阵）
+├── res/                      图标、TV 横幅与字符串
+└── tools/                    图标生成、圆形预览图、文档截图整理</code></pre>
+<p>构建环境：NDK r21e（<code>D:/ndk21/android-ndk-r21e</code>，能出 API 16 的 32 位库）、Android SDK build-tools 31.0.0、platforms/android-31、JDK 17。 在 <code>Android-移植/app</code> 目录执行：</p>
+<pre><code>python build_apk.py</code></pre>
+<p>脚本会依次编译四个 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64）的原生库并 strip、 生成图标、aapt2 编译资源、javac + d8 生成 dex（<code>--min-api 16</code>）、打包、zipalign 对齐并用 调试证书签名，最终在 <code>Android-移植/</code> 下生成 APK。</p>
+<hr>
+<h2>11. 卸载</h2>
+<p>桌面长按图标 → 应用信息 → 卸载；或 设置 → 应用 → CoherencyLatency → 卸载。 应用私有目录里的历史 CSV 会一并删除，需要保留的先导出。</p>
+<hr>
+<h2>12. 版本与许可</h2>
+<ul><li>版本：1.1.0（versionCode 4，对应 MicroBenchX v1.0.5 的算法与输出格式）</li><li>系统支持：Android 4.1（API 16）及以上</li><li>架构：arm64-v8a / armeabi-v7a / x86 / x86_64 四合一</li><li>界面适配：手机 / 平板 / 圆形手表 / Android TV</li><li>结果标记：绑核失败的核心对显示 N/A（CSV 同）</li><li>上游：&lt;https://github.com/CXWorld/MicroBenchX&gt;（MIT，Copyright (c) 2021 CapFrameX）</li><li>本移植版同样使用 MIT 许可，详见文件夹内的 <code>LICENSE</code>。</li></ul>
+</body>
+</html>
