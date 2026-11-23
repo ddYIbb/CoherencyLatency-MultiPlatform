@@ -58,6 +58,12 @@ struct Index {
   @State private smtText: string = '';
   @State private hasSmt: boolean = false;
 
+  // 缓存矩阵统计量：cells 每次更新只重算一次，避免每个单元格都全表扫描（O(n^4)→O(n^2)）
+  private statMin: number = 0;
+  private statMax: number = 0;
+  private statAverage: number = 0;
+  private statsValid: boolean = false;
+
   private timerId: number = -1;
   private startMillis: number = 0;
   private lastCsv: string = '';
@@ -305,6 +311,7 @@ struct Index {
       cells.push(-1);
     }
     this.cells = cells;
+    this.statsValid = false;
   }
 
   // -------------------------------------------------------------------------
@@ -367,6 +374,7 @@ struct Index {
         const next: number[] = this.cells.slice();
         next[result.row * this.n + result.column] = Number.isNaN(result.latency) ? Number.NaN : result.latency;
         this.cells = next;
+        this.statsValid = false;
       }
       this.donePairs = result.done;
       this.totalPairs = result.total;
@@ -403,6 +411,7 @@ struct Index {
     const finalMatrix: number[] = benchMatrix();
     if (finalMatrix.length === this.n * this.n) {
       this.cells = finalMatrix;
+      this.statsValid = false;
     }
     this.donePairs = this.totalPairs;
     this.caption = '最终结果 · 双向平均 · ns/op';
@@ -536,49 +545,60 @@ struct Index {
     return values;
   }
 
-  private minimum(): number {
-    const values: number[] = this.measuredValues();
-    if (values.length === 0) {
-      return 0;
+  private refreshStats(): void {
+    if (this.statsValid) {
+      return;
     }
-    let min: number = values[0];
-    for (let index = 1; index < values.length; ++index) {
-      if (values[index] < min) {
-        min = values[index];
+    let min: number = Number.POSITIVE_INFINITY;
+    let max: number = Number.NEGATIVE_INFINITY;
+    let sum: number = 0;
+    let count: number = 0;
+    for (let row = 0; row < this.n; ++row) {
+      for (let column = 0; column < this.n; ++column) {
+        if (row === column) {
+          continue;
+        }
+        const value: number = this.cells[row * this.n + column];
+        if (!Number.isNaN(value) && value > 0) {
+          if (value < min) {
+            min = value;
+          }
+          if (value > max) {
+            max = value;
+          }
+          sum += value;
+          count += 1;
+        }
       }
     }
-    return min;
+    if (count === 0) {
+      this.statMin = 0;
+      this.statMax = 0;
+      this.statAverage = 0;
+    } else {
+      this.statMin = min;
+      this.statMax = max;
+      this.statAverage = sum / count;
+    }
+    this.statsValid = true;
+  }
+
+  private minimum(): number {
+    this.refreshStats();
+    return this.statMin;
   }
 
   private maximum(): number {
-    const values: number[] = this.measuredValues();
-    if (values.length === 0) {
-      return 0;
-    }
-    let max: number = values[0];
-    for (let index = 1; index < values.length; ++index) {
-      if (values[index] > max) {
-        max = values[index];
-      }
-    }
-    return max;
+    this.refreshStats();
+    return this.statMax;
   }
 
   private average(): number {
-    const values: number[] = this.measuredValues();
-    if (values.length === 0) {
-      return 0;
-    }
-    let sum: number = 0;
-    for (let index = 0; index < values.length; ++index) {
-      sum += values[index];
-    }
-    return sum / values.length;
+    this.refreshStats();
+    return this.statAverage;
   }
 
-  private heatColor(value: number): string {
-    const min: number = this.minimum();
-    const max: number = this.maximum();
+  private heatColor(value: number, min: number, max: number): string {
     if (max - min < 0.0001) {
       return '#12B76A';
     }
@@ -625,7 +645,7 @@ struct Index {
     if (value <= 0) {
       return '#F2F4F7';
     }
-    return this.heatColor(value);
+    return this.heatColor(value, this.minimum(), this.maximum());
   }
 
   private cellForeground(row: number, column: number): string {
