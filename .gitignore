@@ -62,3 +62,16 @@ Thumbs.db
 /harmonyos/entry/build/
 /harmonyos/entry/.preview/
 /harmonyos/local.properties
+
+# Desktop GUI build trees and captures
+/build-gui/
+/gui/macos/build/
+/gui/windows/*.obj
+/gui/windows/*.exe
+/gui/windows/*.txt
+/gui/windows/screenshots/*.png
+/tools/launcher-gui/build/
+
+# Release staging
+/dist/
+/dump.txt

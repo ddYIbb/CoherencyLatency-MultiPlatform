@@ -1,0 +1,35 @@
+#define IDR_X86 201
+#define IDR_X64 202
+#define IDR_ARM64 203
+#define IDI_APPICON 101
+
+IDR_X86 RCDATA "@PAYLOAD_X86@"
+IDR_X64 RCDATA "@PAYLOAD_X64@"
+IDR_ARM64 RCDATA "@PAYLOAD_ARM64@"
+IDI_APPICON ICON "@ICON_PATH@"
+
+1 VERSIONINFO
+FILEVERSION 1,2,0,0
+PRODUCTVERSION 1,2,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "CoherencyLatency-MultiPlatform"
+            VALUE "FileDescription", "CoherencyLatency \u7f13\u5b58\u4e00\u81f4\u6027\u5ef6\u8fdf\u6d4b\u8bd5"
+            VALUE "FileVersion", "1.2.0"
+            VALUE "InternalName", "CoherencyLatency"
+            VALUE "LegalCopyright", "MIT License"
+            VALUE "OriginalFilename", "CoherencyLatency.exe"
+            VALUE "ProductName", "CoherencyLatency"
+            VALUE "ProductVersion", "1.2.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

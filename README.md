@@ -21,6 +21,8 @@
 |---|---|---|---|
 | macOS | `CoherencyLatency-macOS-v1.2.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
 | Windows | `CoherencyLatency-Windows-v1.2.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+| Windows（图形界面） | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | Windows 10（1809）及以上 | 原生 Win32 界面，跟随系统深色模式与强调色；单文件启动器同样自动匹配 x86、x64、ARM64 |
+| macOS（图形界面） | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac：macOS 10.13；Apple Silicon Mac：macOS 11.0 | 原生 AppKit 界面，同一个 Universal 2 程序（x86_64 + arm64），内含 `.app` 应用包与独立可执行文件 |
 | Android（命令行） | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
 | Android（图形界面） | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
 | HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip`（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、平板、2in1；动态识别 2–20 个逻辑线程 |
@@ -50,6 +52,8 @@
 | Android（命令行） | [CoherencyLatency-Android-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-v1.2.0.zip) |
 | Android（图形界面） | [CoherencyLatency-Android-UI-v1.2.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-UI-v1.2.0.apk) |
 | HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-HarmonyOS-v1.2.0.zip) |
+| Windows（图形界面） | [CoherencyLatency-Windows-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-GUI-v1.2.0.zip) |
+| macOS（图形界面） | [CoherencyLatency-macOS-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-GUI-v1.2.0.zip) |
 
 macOS 版下载后解压得到一个可执行文件。如果首次打开被 Gatekeeper 拦截，请右键选择“打开”，或执行 `xattr -dr com.apple.quarantine CoherencyLatency` 清除隔离属性。
 
@@ -59,7 +63,9 @@ Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件
 
 HarmonyOS 版下载后解压，得到未签名 HAP、完整源码、使用手册和《自行签名说明.md》。未签名 HAP 不能直接安装；请先按说明用 DevEco Studio 或 `hap-sign-tool` 签名。
 
-详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）、[Windows 使用说明](docs/Windows-使用说明.md)、[Android 命令行使用手册](android/docs/使用手册.md)（[PDF](android/docs/使用手册.pdf)）、[Android APK 使用说明](android/docs/APK使用说明.md)（[PDF](android/docs/APK使用说明.pdf)）和 [HarmonyOS 使用手册](harmonyos/docs/使用手册.md)（[PDF](harmonyos/docs/使用手册.pdf)）。
+Windows 和 macOS 还各有一个**图形界面版**：同样的测量核心，界面按各自系统的原生风格重写（Windows 用 Win32 控件与系统强调色，macOS 用 AppKit 原生控件），默认窗口紧凑（600×880，竖向），点“开始测试”即测量全部逻辑线程，矩阵按延迟热力着色，测完自动把 CSV 存到“文档/CoherencyLatency”。macOS 包内既有可双击的 `CoherencyLatency.app`，也有同目录的独立可执行文件，命令行用法与命令行版完全一致。图形界面版的详细说明见 [桌面图形界面使用说明](docs/GUI-使用说明.md)（[PDF](docs/GUI-使用说明.pdf)）。
+
+详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）、[Windows 使用说明](docs/Windows-使用说明.md)、[桌面图形界面使用说明](docs/GUI-使用说明.md)（[PDF](docs/GUI-使用说明.pdf)）、[Android 命令行使用手册](android/docs/使用手册.md)（[PDF](android/docs/使用手册.pdf)）、[Android APK 使用说明](android/docs/APK使用说明.md)（[PDF](android/docs/APK使用说明.pdf)）和 [HarmonyOS 使用手册](harmonyos/docs/使用手册.md)（[PDF](harmonyos/docs/使用手册.pdf)）。
 
 ## 与原项目的关系
 

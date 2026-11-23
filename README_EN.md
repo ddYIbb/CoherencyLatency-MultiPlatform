@@ -24,6 +24,8 @@ None of the downloads requires installing any runtime — copy it over and it ru
 | Android (CLI) | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
 | Android (GUI) | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
 | HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip` (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phones, tablets and 2-in-1; detects 2–20 logical threads at runtime |
+| Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | Windows 10 (1809) or later | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
+| macOS (GUI) | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac: macOS 10.13; Apple Silicon Mac: macOS 11.0 | Native AppKit UI in one Universal 2 program (x86_64 + arm64), shipping both a `.app` bundle and a standalone executable |
 
 Notes:
 
@@ -50,12 +52,16 @@ Latest release: [v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatfor
 | Android (CLI) | [CoherencyLatency-Android-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-v1.2.0.zip) |
 | Android (GUI) | [CoherencyLatency-Android-UI-v1.2.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-UI-v1.2.0.apk) |
 | HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-HarmonyOS-v1.2.0.zip) |
+| Windows (GUI) | [CoherencyLatency-Windows-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-GUI-v1.2.0.zip) |
+| macOS (GUI) | [CoherencyLatency-macOS-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-GUI-v1.2.0.zip) |
 
 The macOS download is a zip containing a native executable. If Gatekeeper blocks the first launch, right-click the file and choose **Open**, or remove the quarantine attribute with `xattr -dr com.apple.quarantine CoherencyLatency`.
 
 The Windows download is a single `.exe`: it runs the native program matching the current Windows installation and deletes the temporary extracted file when it exits. No installer, nothing written to the registry, static CRT, and no Visual C++ runtime required. It runs on Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11. The first launch of a freshly downloaded file may take up to a few tens of seconds while Windows Defender scans it.
 
 The Android CLI build is a zip with four ABI executables for Termux or `adb shell`; the GUI build is a single APK for phones, tablets, round watches and Android TV. Both support Android 4.1 (API 16) or later.
+
+Windows and macOS additionally get a **GUI build**: the same measurement core with an interface written natively for each system (Win32 controls and the system accent colour on Windows, AppKit controls on macOS). The default window is deliberately compact (600×880, portrait); press “Start” to measure every logical thread, and the matrix is colour-coded by latency. The CSV is written to `Documents/CoherencyLatency` when a run finishes. The macOS package contains both a double-clickable `CoherencyLatency.app` and a standalone executable with the same command-line interface as the CLI build. See the [desktop GUI manual](docs/GUI-使用说明.md) (Chinese, [PDF](docs/GUI-使用说明.pdf)).
 
 The HarmonyOS download is a zip containing an unsigned HAP, full source, the manual and a signing guide. The unsigned HAP cannot be installed directly; sign it with DevEco Studio or `hap-sign-tool` first.
 

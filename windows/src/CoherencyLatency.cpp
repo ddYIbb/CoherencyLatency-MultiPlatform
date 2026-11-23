@@ -158,6 +158,17 @@ struct CpuTopology {
         }
         return slots[static_cast<std::size_t>(index)];
     }
+
+    // Flattened index of a (group, processor) pair, -1 when it is not active.
+    int slot_for(int group, int processor) const {
+        for (std::size_t index = 0; index < slots.size(); ++index) {
+            if (slots[index].group == group &&
+                slots[index].processor == processor) {
+                return static_cast<int>(index);
+            }
+        }
+        return -1;
+    }
 };
 
 CpuTopology g_topology;
@@ -1156,6 +1167,7 @@ const char* mode_name(Mode mode) {
 
 }  // namespace
 
+#if !defined(CL_NO_MAIN)
 int main(int argc, char** argv) {
     // A single large stdout buffer replaces the per-insertion buffering of the
     // iostream path and keeps the matrix output to one write per chunk.
@@ -1256,3 +1268,4 @@ int main(int argc, char** argv) {
         return 2;
     }
 }
+#endif  // CL_NO_MAIN

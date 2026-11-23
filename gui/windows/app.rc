@@ -1,0 +1,37 @@
+// Resource script for the CoherencyLatency Windows GUI.
+// The icon is shared with the launcher GUI so the two executables match.
+#include <windows.h>
+#include "resource.h"
+
+IDI_APPICON ICON "..\\..\\tools\\launcher-gui\\app.ico"
+
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,2,0,0
+ PRODUCTVERSION 1,2,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "CoherencyLatency"
+            VALUE "FileDescription", "CoherencyLatency 1.2.0"
+            VALUE "FileVersion", "1.2.0.0"
+            VALUE "InternalName", "CoherencyLatency"
+            VALUE "LegalCopyright", "MIT License"
+            VALUE "OriginalFilename", "CoherencyLatency.exe"
+            VALUE "ProductName", "CoherencyLatency"
+            VALUE "ProductVersion", "1.2.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
