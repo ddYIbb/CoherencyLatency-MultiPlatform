@@ -1165,11 +1165,11 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             button.setBackgroundTintList(null);
         }
-        // focusableInTouchMode makes the first tap only move focus to the
-        // button, so every button needed two taps.  Plain focusable keeps
-        // D-pad/remote navigation (once the window leaves touch mode) without
-        // stealing the tap.
-        button.setFocusable(true);
+        // A focusable button swallows the first tap on some ROMs: the tap only
+        // moves focus, and the second one presses.  Only the TV layout needs
+        // D-pad focus, so phones, tablets and watches keep the buttons out of
+        // the focus chain entirely and every tap presses immediately.
+        button.setFocusable(isTelevision);
         button.setFocusableInTouchMode(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             button.setStateListAnimator(null);
