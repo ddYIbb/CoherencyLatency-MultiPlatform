@@ -80,6 +80,22 @@ public class MainActivity extends Activity {
     private static final int STOP_BACKGROUND = 0xFFF2F4F7;
     private static final int FOCUS_BACKGROUND = 0xFFEAF1FF;
 
+    // Dark palette used when the system is in night mode (values-night themes
+    // paint the window background before the activity builds its views).
+    private static final int DARK_BACKGROUND = 0xFF0F1216;
+    private static final int DARK_CARD = 0xFF161A20;
+    private static final int DARK_TEXT_PRIMARY = 0xFFE7EAF0;
+    private static final int DARK_TEXT_SECONDARY = 0xFFA6AEB8;
+    private static final int DARK_TEXT_TERTIARY = 0xFF7C8794;
+    private static final int DARK_ACCENT_BORDER = 0xFF2E4F8F;
+    private static final int DARK_BORDER = 0xFF2A3038;
+    private static final int DARK_FIELD = 0xFF1B2027;
+    private static final int DARK_STOP_BACKGROUND = 0xFF232932;
+    private static final int DARK_FOCUS_BACKGROUND = 0xFF1E2A44;
+
+    /** True when the activity was created under the system night mode. */
+    private static boolean darkMode;
+
     /** Matrix heat scale, matched to the desktop UI: green -> orange -> red. */
     private static final int HEAT_GREEN = 0xFF16B769;
     private static final int HEAT_ORANGE = 0xFFF48011;
@@ -194,6 +210,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        darkMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.FROYO
+                && (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         readProfile();
         setContentView(buildContent());
         applyWindowFlags();
@@ -212,10 +231,10 @@ public class MainActivity extends Activity {
     private void applyWindowFlags() {
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            window.setStatusBarColor(BACKGROUND);
+            window.setStatusBarColor(bg());
         }
         int flags = 0;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !darkMode) {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         }
         if (isWatch || isTelevision) {
@@ -304,7 +323,7 @@ public class MainActivity extends Activity {
     private View buildContent() {
         scrollView = new ScrollView(this);
         scrollView.setFillViewport(isTelevision);
-        scrollView.setBackgroundColor(BACKGROUND);
+        scrollView.setBackgroundColor(bg());
         scrollView.setClipToPadding(false);
         scrollView.setVerticalScrollBarEnabled(!isWatch);
         scrollView.setFocusable(false);
@@ -380,7 +399,7 @@ public class MainActivity extends Activity {
 
     private void addHeader(LinearLayout parent) {
         TextView title = text("CoherencyLatency", isWatch ? 23f : 27f,
-                TEXT_PRIMARY, true);
+                textPrimary(), true);
         if (isWatch) {
             title.setGravity(Gravity.CENTER_HORIZONTAL);
         }
@@ -388,7 +407,7 @@ public class MainActivity extends Activity {
 
         TextView subtitle = text(
                 isWatch ? "缓存一致性测试" : "缓存一致性延迟测试 · Android 原生版",
-                isWatch ? 12f : 13f, TEXT_SECONDARY, false);
+                isWatch ? 12f : 13f, textSecondary(), false);
         if (isWatch) {
             subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
         }
@@ -402,7 +421,7 @@ public class MainActivity extends Activity {
         if (!isWatch) {
             infoCard.addView(sectionTitle("设备信息"));
         }
-        infoText = text("读取中…", isWatch ? 11f : 12.5f, TEXT_SECONDARY, false);
+        infoText = text("读取中…", isWatch ? 11f : 12.5f, textSecondary(), false);
         infoText.setTypeface(Typeface.MONOSPACE);
         infoText.setLineSpacing(dp(isWatch ? 2 : 3), 1.0f);
         infoText.setPadding(0, dp(isWatch ? 2 : 8), 0, 0);
@@ -411,7 +430,7 @@ public class MainActivity extends Activity {
         if (!isWatch) {
             TextView fixedParams = text(
                     "固定参数：全部逻辑核心 · 1,000,000 次 · 3 轮 · Bounce",
-                    11.5f, TEXT_TERTIARY, false);
+                    11.5f, textTertiary(), false);
             fixedParams.setPadding(0, dp(6), 0, 0);
             infoCard.addView(fixedParams);
         }
@@ -436,7 +455,7 @@ public class MainActivity extends Activity {
                 0, dp(buttonHeightDp()), 2f);
         buttons.addView(startButton, startParams);
 
-        stopButton = actionButton("停止", STOP_BACKGROUND, TEXT_PRIMARY, BORDER, false);
+        stopButton = actionButton("停止", stopBackground(), textPrimary(), border(), false);
         stopButton.setEnabled(false);
         stopButton.setAlpha(0.5f);
         stopButton.setOnClickListener(new View.OnClickListener() {
@@ -457,14 +476,14 @@ public class MainActivity extends Activity {
         progressBar.setProgress(0);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             progressBar.setProgressTintList(ColorStateList.valueOf(ACCENT));
-            progressBar.setProgressBackgroundTintList(ColorStateList.valueOf(BORDER));
+            progressBar.setProgressBackgroundTintList(ColorStateList.valueOf(border()));
         }
         LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(isWatch ? 4 : isTelevision ? 8 : 6));
         barParams.topMargin = dp(isWatch ? 10 : isTelevision ? 22 : 18);
         parent.addView(progressBar, barParams);
 
-        statusText = text("就绪", 12.5f, TEXT_SECONDARY, false);
+        statusText = text("就绪", 12.5f, textSecondary(), false);
         LinearLayout.LayoutParams statusParams = wrapParams();
         statusParams.topMargin = dp(isWatch ? 6 : 8);
         parent.addView(statusText, statusParams);
@@ -482,7 +501,7 @@ public class MainActivity extends Activity {
         scrollParams.topMargin = dp(isWatch ? 6 : 8);
         matrixCard.addView(hScroll, scrollParams);
 
-        matrixText = text("", isWatch ? 10f : 12.5f, TEXT_PRIMARY, false);
+        matrixText = text("", isWatch ? 10f : 12.5f, textPrimary(), false);
         matrixText.setTypeface(Typeface.MONOSPACE);
         matrixText.setTextIsSelectable(false);
         matrixText.setFocusable(false);
@@ -494,7 +513,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         matrixNote = text("N/A = 该核心对未能绑定到指定 CPU", isWatch ? 9.5f : 11f,
-                TEXT_TERTIARY, false);
+                textTertiary(), false);
         matrixNote.setVisibility(View.GONE);
         LinearLayout.LayoutParams noteParams = wrapParams();
         noteParams.topMargin = dp(6);
@@ -503,7 +522,7 @@ public class MainActivity extends Activity {
     }
 
     private void addExport(LinearLayout parent) {
-        exportButton = actionButton("导出 CSV…", CARD, ACCENT, ACCENT_BORDER, false);
+        exportButton = actionButton("导出 CSV…", card(), ACCENT, accentBorder(), false);
         exportButton.setEnabled(false);
         exportButton.setAlpha(0.5f);
         exportButton.setOnClickListener(new View.OnClickListener() {
@@ -517,7 +536,7 @@ public class MainActivity extends Activity {
         exportParams.topMargin = dp(isWatch ? 8 : 12);
         parent.addView(exportButton, exportParams);
 
-        savedText = text(" ", 11.5f, TEXT_TERTIARY, false);
+        savedText = text(" ", 11.5f, textTertiary(), false);
         LinearLayout.LayoutParams savedParams = wrapParams();
         savedParams.topMargin = dp(6);
         parent.addView(savedText, savedParams);
@@ -529,7 +548,7 @@ public class MainActivity extends Activity {
             return;
         }
         TextView footer = text("数值是每次原子操作的往返延迟，越低越好。导出后可导入表格软件。",
-                11.5f, TEXT_TERTIARY, false);
+                11.5f, textTertiary(), false);
         LinearLayout.LayoutParams footerParams = wrapParams();
         footerParams.topMargin = dp(isTelevision ? 24 : 18);
         parent.addView(footer, footerParams);
@@ -830,7 +849,7 @@ public class MainActivity extends Activity {
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 } else if (kind == CELL_DIAGONAL || kind == CELL_PENDING
                         || kind == CELL_NA) {
-                    text.setSpan(new ForegroundColorSpan(TEXT_SECONDARY), start, end,
+                    text.setSpan(new ForegroundColorSpan(textSecondary()), start, end,
                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 }
             }
@@ -1102,7 +1121,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView sectionTitle(String value) {
-        TextView view = text(value, 12.5f, TEXT_TERTIARY, true);
+        TextView view = text(value, 12.5f, textTertiary(), true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             view.setLetterSpacing(0.06f);
         }
@@ -1115,7 +1134,7 @@ public class MainActivity extends Activity {
         int padding = isWatch ? 10 : isTelevision ? 22 : 16;
         card.setPadding(dp(padding), dp(isWatch ? 9 : 14), dp(padding),
                 dp(isWatch ? 10 : 16));
-        card.setBackground(roundRect(CARD, isWatch ? 12 : 14, 0, 0));
+        card.setBackground(roundRect(card(), isWatch ? 12 : 14, 0, 0));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             card.setElevation(dp(isWatch ? 0.5f : 1.5f));
         }
@@ -1161,10 +1180,10 @@ public class MainActivity extends Activity {
     private Drawable buttonBackground(int normal, int stroke, boolean primary) {
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_focused},
-                roundRect(primary ? ACCENT_DARK : FOCUS_BACKGROUND,
+                roundRect(primary ? ACCENT_DARK : focusBackground(),
                         12, primary ? Color.WHITE : ACCENT, 2));
         states.addState(new int[]{android.R.attr.state_pressed},
-                roundRect(primary ? 0xFF1D4ED8 : 0xFFE4E7EC, 12, stroke,
+                roundRect(primary ? 0xFF1D4ED8 : (darkMode ? DARK_BORDER : 0xFFE4E7EC), 12, stroke,
                         stroke == 0 ? 0 : 1));
         states.addState(new int[]{}, roundRect(normal, 12, stroke,
                 stroke == 0 ? 0 : 1));
@@ -1180,6 +1199,49 @@ public class MainActivity extends Activity {
             drawable.setStroke(dp(strokeDp), strokeColor);
         }
         return drawable;
+    }
+
+    // Night-mode aware palette accessors.  Everything that paints a surface or
+    // text goes through these so a dark system theme stays readable.
+
+    private int bg() {
+        return darkMode ? DARK_BACKGROUND : BACKGROUND;
+    }
+
+    private int card() {
+        return darkMode ? DARK_CARD : CARD;
+    }
+
+    private int textPrimary() {
+        return darkMode ? DARK_TEXT_PRIMARY : TEXT_PRIMARY;
+    }
+
+    private int textSecondary() {
+        return darkMode ? DARK_TEXT_SECONDARY : TEXT_SECONDARY;
+    }
+
+    private int textTertiary() {
+        return darkMode ? DARK_TEXT_TERTIARY : TEXT_TERTIARY;
+    }
+
+    private int border() {
+        return darkMode ? DARK_BORDER : BORDER;
+    }
+
+    private int field() {
+        return darkMode ? DARK_FIELD : FIELD;
+    }
+
+    private int stopBackground() {
+        return darkMode ? DARK_STOP_BACKGROUND : STOP_BACKGROUND;
+    }
+
+    private int focusBackground() {
+        return darkMode ? DARK_FOCUS_BACKGROUND : FOCUS_BACKGROUND;
+    }
+
+    private int accentBorder() {
+        return darkMode ? DARK_ACCENT_BORDER : ACCENT_BORDER;
     }
 
     private LinearLayout.LayoutParams wrapParams() {

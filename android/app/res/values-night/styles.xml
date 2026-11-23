@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 4.1-4.4 fallback theme, night variant.  The dark parent keeps
+         scrollbars, text-selection handles and the scrollbar thumb legible on
+         the dark window background; every text/surface colour in the activity
+         is set explicitly, so nothing inherits a light-on-light default. -->
+    <style name="AppTheme" parent="@android:style/Theme.Holo.NoActionBar">
+        <item name="android:windowBackground">#FF0F1216</item>
+    </style>
+</resources>
