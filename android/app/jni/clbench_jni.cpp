@@ -11,6 +11,7 @@
 #include <sys/system_properties.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -86,6 +87,9 @@ std::uint64_t now_ns() {
 
 inline void spin_pause();
 
+// How often a single-CPU pin is retried before the pair is reported as N/A.
+constexpr int kPinAttempts = 4;
+
 bool configure_current_thread(int cpu_index) {
     // bionic has no pthread_setaffinity_np; sched_setaffinity with the thread
     // id is the Linux equivalent.  A successful call is not enough: a cpuset,
@@ -100,39 +104,46 @@ bool configure_current_thread(int cpu_index) {
         return false;
     }
     bool pinned = false;
-    {
+    // A pin request can fail transiently (the CPU is busy with the thread being
+    // migrated, a governor is reshuffling tasks), so retry a few times before
+    // declaring the pair unmeasurable.
+    for (int attempt = 0; attempt < kPinAttempts && !pinned; ++attempt) {
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(cpu_index, &set);
-        if (sched_setaffinity(gettid(), sizeof(set), &set) == 0) {
-            cpu_set_t effective;
-            CPU_ZERO(&effective);
-            if (sched_getaffinity(gettid(), sizeof(effective), &effective) == 0 &&
-                CPU_ISSET(cpu_index, &effective)) {
-                // setaffinity normally migrates a running task before it
-                // returns; a short pause loop covers a slow scheduler.  A
-                // pause is better than sched_yield() here: yielding lets the
-                // scheduler move the thread away again, which is the opposite
-                // of what this loop waits for.
-                for (int attempt = 0; attempt < 64; ++attempt) {
-                    if (sched_getcpu() == cpu_index) {
-                        pinned = true;
-                        break;
-                    }
-                    spin_pause();
-                }
-                // Fall back to real yields in case the CPU is still busy with
-                // the thread we replaced.
-                if (!pinned) {
-                    for (int attempt = 0; attempt < 16; ++attempt) {
-                        if (sched_getcpu() == cpu_index) {
-                            pinned = true;
-                            break;
-                        }
-                        sched_yield();
-                    }
-                }
+        if (sched_setaffinity(gettid(), sizeof(set), &set) != 0) {
+            continue;
+        }
+        cpu_set_t effective;
+        CPU_ZERO(&effective);
+        if (sched_getaffinity(gettid(), sizeof(effective), &effective) != 0 ||
+            !CPU_ISSET(cpu_index, &effective)) {
+            continue;
+        }
+        // setaffinity normally migrates a running task before it returns; a
+        // short pause loop covers a slow scheduler.  A pause is better than
+        // sched_yield() here: yielding lets the scheduler move the thread away
+        // again, which is the opposite of what this loop waits for.
+        for (int spin = 0; spin < 64; ++spin) {
+            if (sched_getcpu() == cpu_index) {
+                pinned = true;
+                break;
             }
+            spin_pause();
+        }
+        // Fall back to real yields in case the CPU is still busy with the
+        // thread we replaced.
+        if (!pinned) {
+            for (int spin = 0; spin < 16; ++spin) {
+                if (sched_getcpu() == cpu_index) {
+                    pinned = true;
+                    break;
+                }
+                sched_yield();
+            }
+        }
+        if (!pinned && attempt + 1 < kPinAttempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
     char name[32] = {};
@@ -163,6 +174,11 @@ void bounce_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
+    // A worker whose peer never shows up (aborted round, stalled scheduler)
+    // would spin here forever, and the join() after a timeout would hang the
+    // UI.  Checking the abort flag lets the pair unwind instead.
+    const std::atomic<bool>& abort = config->gate->abort;
+    std::uint32_t spins = 0;
 
     while (current <= limit) {
         std::uint64_t expected = current - 1;
@@ -170,6 +186,9 @@ void bounce_worker(ThreadConfig* config) {
                                            std::memory_order_seq_cst,
                                            std::memory_order_seq_cst)) {
             current += 2;
+        } else if ((++spins & 0x3FFu) == 0 &&
+                   abort.load(std::memory_order_acquire)) {
+            return;
         }
     }
 }
@@ -179,11 +198,17 @@ void owned_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
+    // Same reasoning as bounce_worker: never spin past an abort.
+    const std::atomic<bool>& abort = config->gate->abort;
+    std::uint32_t spins = 0;
 
     while (current <= limit) {
         if (read_target.load(std::memory_order_acquire) == current - 1) {
             target.store(current, std::memory_order_release);
             current += 2;
+        } else if ((++spins & 0x3FFu) == 0 &&
+                   abort.load(std::memory_order_acquire)) {
+            return;
         }
     }
 }
@@ -303,14 +328,31 @@ void abort_pair(StartGate& gate, int rounds) {
 struct PairOutcome {
     float latency_ns = std::numeric_limits<float>::quiet_NaN();
     bool affinity_ok = false;
+    // True only when the user pressed Stop: the matrix ends here.
     bool aborted = true;
+    // True when this pair alone failed (no pin, stalled round, thread that
+    // never started).  The pair becomes N/A and the matrix keeps going.
+    bool failed = false;
 };
+
+PairOutcome failed_pair() {
+    PairOutcome outcome;
+    outcome.aborted = false;
+    outcome.failed = true;
+    return outcome;
+}
 
 // Sleeps on the gate until the predicate is true.  The wait is sliced so a
 // Stop request from the UI is still noticed while the main thread sleeps; the
 // slice is short enough to be invisible to the user and long enough that the
 // main thread no longer burns a core in sched_yield() polling.
 constexpr std::chrono::milliseconds kWaitSlice(20);
+
+// Time budget for the very first round of a pair and the floor for the later
+// rounds (see run_pair): big.LITTLE parts can need well over a second for one
+// million handoffs on a slow pair.
+constexpr std::uint64_t kFirstRoundTimeoutMs = 20000;
+constexpr std::uint64_t kMinimumRoundTimeoutMs = 5000;
 
 template <typename Predicate>
 bool wait_for_condition(StartGate& gate, std::chrono::milliseconds timeout,
@@ -379,13 +421,33 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             gate.cv.notify_all();
             thread1.join();
             thread2.join();
+            // Stop press or a failed pair start: both end this pair only.
             if (abort_requested()) {
                 return PairOutcome{};
             }
-            throw std::runtime_error("benchmark thread did not start");
+            return failed_pair();
+        }
+
+        // A worker that could not be pinned is reported as N/A no matter what
+        // the measurement returns, and measuring anyway is not just wasted
+        // time: both workers then share one CPU and every handoff waits for a
+        // scheduler turn, which takes minutes for a million iterations.  Bail
+        // out before the first round instead.
+        if (!config1.affinity_ok || !config2.affinity_ok) {
+            abort_pair(gate, config1.rounds);
+            gate.cv.notify_all();
+            thread1.join();
+            thread2.join();
+            return failed_pair();
         }
 
         float minimum = std::numeric_limits<float>::infinity();
+        // A round takes 2 * iterations handoffs, so its duration depends on the
+        // device and on the pair.  A fixed 500 ms budget used to abort the whole
+        // matrix on big.LITTLE parts where a slow pair needs longer than that;
+        // the first round gets a generous ceiling and later rounds are budgeted
+        // from the measured first round.
+        std::chrono::milliseconds round_timeout(kFirstRoundTimeoutMs);
         for (int round = 0; round < config1.rounds; ++round) {
             if (abort_requested()) {
                 abort_pair(gate, config1.rounds);
@@ -402,7 +464,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             const std::uint64_t begin = now_ns();
             gate.round_go.store(round + 1, std::memory_order_release);
             const bool finished = wait_for_condition(
-                gate, std::chrono::milliseconds(500), [&gate, round] {
+                gate, round_timeout, [&gate, round] {
                     return gate.round_done.load(std::memory_order_acquire) >=
                            2 * (round + 1);
                 });
@@ -414,8 +476,9 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
                 if (abort_requested()) {
                     return PairOutcome{};
                 }
-                throw std::runtime_error(
-                    "benchmark thread did not finish a round");
+                // A stalled round is a failed pair, not a failed matrix: the
+                // result is reported as N/A and the remaining pairs still run.
+                return failed_pair();
             }
             // The workers publish their own end timestamps; the window closes
             // where the slower of the two stopped working.
@@ -423,8 +486,16 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
                 gate.round_end[0] > gate.round_end[1] ? gate.round_end[0]
                                                       : gate.round_end[1];
             if (end <= begin) {
-                throw std::runtime_error("monotonic clock did not advance");
+                abort_pair(gate, config1.rounds);
+                thread1.join();
+                thread2.join();
+                return failed_pair();
             }
+
+            const std::uint64_t elapsed_ms = (end - begin) / 1000000ULL;
+            round_timeout = std::chrono::milliseconds(
+                std::max<std::uint64_t>(kMinimumRoundTimeoutMs,
+                                        elapsed_ms * 4 + 2000));
 
             const double latency_ns = static_cast<double>(end - begin) /
                                       static_cast<double>(iterations) / 2.0;
@@ -442,11 +513,12 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         outcome.aborted = false;
         return outcome;
     } catch (...) {
+        // Thread creation failed: N/A for this pair instead of a dead matrix.
         abort_pair(gate, config1.rounds);
         gate.cv.notify_all();
         thread1.join();
         thread2.join();
-        throw;
+        return failed_pair();
     }
 }
 
@@ -749,7 +821,7 @@ Java_com_ddyibb_coherencylatency_NativeBench_runMatrix(JNIEnv* env, jclass,
                     aborted = true;
                     break;
                 }
-                const PairOutcome pair =
+                PairOutcome pair =
                     run_pair(row, column,
                              static_cast<std::uint64_t>(iterations),
                              static_cast<std::uint64_t>(runs),
@@ -758,13 +830,26 @@ Java_com_ddyibb_coherencylatency_NativeBench_runMatrix(JNIEnv* env, jclass,
                     aborted = true;
                     break;
                 }
-                // A pair whose workers could not really be pinned is still
-                // consumed, so the remaining pairs finish; its value is NaN and
-                // the Java layer renders/export it as N/A.
-                const float value =
-                    pair.affinity_ok
-                        ? pair.latency_ns
-                        : std::numeric_limits<float>::quiet_NaN();
+                if (pair.failed) {
+                    // A stalled round is usually transient (frequency ramp,
+                    // governor or thermal event): give the pair one more try
+                    // before reporting N/A.
+                    pair = run_pair(row, column,
+                                    static_cast<std::uint64_t>(iterations),
+                                    static_cast<std::uint64_t>(runs),
+                                    owned_mode == JNI_TRUE);
+                    if (pair.aborted) {
+                        aborted = true;
+                        break;
+                    }
+                }
+                // A pair whose workers could not really be pinned, or whose
+                // round stalled twice, is still consumed so the remaining pairs
+                // finish; its value is NaN and the Java layer renders/export it
+                // as N/A.
+                const float value = (!pair.failed && pair.affinity_ok)
+                                        ? pair.latency_ns
+                                        : std::numeric_limits<float>::quiet_NaN();
                 matrix[static_cast<std::size_t>(row) * n + column] = value;
                 ++done_pairs;
 

@@ -5,11 +5,14 @@ CLANG = os.path.join(BIN, "clang++.exe")
 SYSROOT = r"D:\ndk21\android-ndk-r21e\toolchains\llvm\prebuilt\windows-x86_64\sysroot"
 FLAGS = ["-std=c++17", "-O3", "-fPIE", "-pie", "-pthread", "-static-libstdc++",
          "-Wall", "-Wextra", "-s"]
+# Android 15+ devices can use 16 KB memory pages; a 64-bit executable then
+# needs 16 KB aligned PT_LOAD segments or the loader refuses to run it.
+PAGE_ALIGN_16K = ["-Wl,-z,max-page-size=16384"]
 TARGETS = [
-    ("arm64-v8a", "aarch64-linux-android21", []),
+    ("arm64-v8a", "aarch64-linux-android21", PAGE_ALIGN_16K),
     ("armeabi-v7a", "armv7a-linux-androideabi16", ["-latomic"]),
     ("x86", "i686-linux-android16", ["-latomic"]),
-    ("x86_64", "x86_64-linux-android21", []),
+    ("x86_64", "x86_64-linux-android21", PAGE_ALIGN_16K),
 ]
 os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
 src = os.path.join(ROOT, "src", "main.cpp")

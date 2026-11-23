@@ -48,11 +48,16 @@ STRIP = os.path.join(TOOLCHAIN, "bin", "llvm-strip.exe")
 
 # 64-bit ABIs only exist from API 21 on, so their slices are built for 21;
 # the 32-bit slices go all the way down to API 16 (Android 4.1).
+# Android 15+ devices can run with 16 KB memory pages; the loader then
+# requires every PT_LOAD segment to be 16 KB aligned.  NDK r21e's clang 9
+# defaults to 4 KB, so the 64-bit slices ask the linker for 16 KB explicitly.
+PAGE_ALIGN_16K = ["-Wl,-z,max-page-size=16384"]
+
 ABIS = {
-    "arm64-v8a": ("aarch64-linux-android21", []),
+    "arm64-v8a": ("aarch64-linux-android21", PAGE_ALIGN_16K),
     "armeabi-v7a": ("armv7a-linux-androideabi16", ["-latomic"]),
     "x86": ("i686-linux-android16", ["-latomic"]),
-    "x86_64": ("x86_64-linux-android21", []),
+    "x86_64": ("x86_64-linux-android21", PAGE_ALIGN_16K),
 }
 
 MIN_SDK = 16
@@ -179,6 +184,10 @@ def package_apk():
     log("aligning")
     if os.path.exists(ALIGNED_APK):
         os.remove(ALIGNED_APK)
+    # The libraries stay deflated and the manifest keeps extractNativeLibs, so
+    # the loader uses the extracted copies and only their ELF p_align (16 KB,
+    # see PAGE_ALIGN_16K) has to satisfy a 16 KB-page device.  Keeping them
+    # compressed also keeps the download at roughly half the uncompressed size.
     run([os.path.join(BUILD_TOOLS, "zipalign.exe"), "-f", "-p", "4",
          UNSIGNED_APK, ALIGNED_APK])
 

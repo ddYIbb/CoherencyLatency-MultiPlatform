@@ -916,8 +916,12 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             button.setBackgroundTintList(null);
         }
+        // focusableInTouchMode makes the first tap only move focus to the
+        // button, so every button needed two taps.  Plain focusable keeps
+        // D-pad/remote navigation (once the window leaves touch mode) without
+        // stealing the tap.
         button.setFocusable(true);
-        button.setFocusableInTouchMode(true);
+        button.setFocusableInTouchMode(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             button.setStateListAnimator(null);
         }

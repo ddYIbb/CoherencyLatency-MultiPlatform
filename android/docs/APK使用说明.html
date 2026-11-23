@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>CoherencyLatency Android 图形界面版 · 使用说明</h1>
-<p><strong>版本：</strong> 1.2.0（versionName <code>1.2.0</code>，versionCode 5，2026-11-23 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.2.0.apk</code>（529,559 B / 517.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5）</p>
+<p><strong>版本：</strong> 1.2.0（versionName <code>1.2.0</code>，versionCode 5，2026-11-23 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.2.0.apk</code>（529,559 B / 517.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5） <strong>本次修订：</strong> 64 位库按 16 KB 页面对齐（Android 15+ 设备不再提示兼容性警告）、移除可调试标记、修复触摸屏按钮需要点两次的问题</p>
 <hr>
 <h2>1. 这是什么</h2>
 <p><code>CoherencyLatency</code> 测量一条缓存行在两个逻辑 CPU 之间来回传递需要多少纳秒。它来自 <a href="https://github.com/CXWorld/MicroBenchX">MicroBenchX v1.0.5</a> 的 <code>CoherencyLatency</code>，本 APK 是它的 Android 原生移植版， 测量核心用 C++ 写成（<code>libclbench.so</code>），外面套一层轻量 Java 界面：</p>
@@ -58,6 +58,7 @@ adb install -r CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <h3>2.5 支持的系统与架构</h3>
 <table><thead><tr><th>项目</th><th>支持范围</th></tr></thead><tbody><tr><td>系统版本</td><td>Android 4.1（API 16）～ Android 15</td></tr><tr><td>32 位 ARM</td><td><code>armeabi-v7a</code>，Android 4.1+ 老手机、老电视盒子</td></tr><tr><td>64 位 ARM</td><td><code>arm64-v8a</code>，2015 年以后的主流手机/平板/电视</td></tr><tr><td>32 位 x86</td><td><code>x86</code>，老 Atom 平板、x86 模拟器</td></tr><tr><td>64 位 x86</td><td><code>x86_64</code>，x86 模拟器、Chromebook</td></tr></tbody></table>
 <p>安装时系统按设备的 ABI 自动挑选对应原生库，用户不需要选。四个 ABI 打包在同一个 APK 里， 所以文件比只带 arm64 的包大一些，但没有额外权限、没有额外依赖。</p>
+<p>64 位原生库（<code>arm64-v8a</code>、<code>x86_64</code>）的 ELF LOAD 段按 <strong>16 KB 页面对齐</strong>（<code>p_align = 0x4000</code>）， 所以在 Android 15 及以后支持 16 KB 页面大小的设备上不会再出现「此应用不符合 16 KB 对齐要求」 的兼容性提示；32 位库保持 4 KB 对齐，以兼容老设备。APK 本身不再带 <code>debuggable</code> 标记， 安装时不会提示「可调试应用」。</p>
 <p>Android 4.1 实测截图（480×800 模拟器，API 16）：</p>
 <p><img alt="Android 4.1 完成" src="screenshots/apk-16-android41.png"></p>
 <p>Android 4.1 上界面用的是系统自带的 Holo 主题（Android 5.0+ 自动换成 Material）， 功能、矩阵、CSV 与高版本完全一致。</p>
@@ -150,6 +151,8 @@ Core 3;34.1536;31.998;30.775;x</code></pre>
 <p><strong>Q：数值每次都不一样。</strong> A：正常。设备有温控、后台任务、大小核迁移，同一台机器相邻两次差几纳秒很常见。 想对比就固定参数、连续测 3 次取中位数。</p>
 <p><strong>Q：为什么有格子是 N/A？</strong> A：这个核心对没有真正绑定成功。常见原因有：某个 CPU 正处于离线/热插拔状态、系统 cpuset 把应用限制在部分核心、厂商调度器拒绝或忽略了 <code>sched_setaffinity</code>、模拟器的 CPU 配置不完整。<code>N/A</code> 表示<strong>该对数值不可用</strong>，不是延迟高，也不是 0。其余核心对仍会 正常完成；在设备空闲、屏幕点亮、性能模式下重测，或换一台没有核限制的设备再试。 如果所有格子都是 <code>N/A</code>，说明当前进程拿不到任何一个请求的核心，通常是系统级限制。</p>
 <p><strong>Q：Bounce 和 Owned 差多少？</strong> A：Owned 一般明显更高，因为它有两次跨缓存行访问；具体倍数取决于 SoC 和缓存层级。 这一版 APK 固定 Bounce，不提供 Owned 切换。</p>
+<p><strong>Q：按钮点一下没反应，要点两下？</strong> A：1.2.0 之前的构建在触摸屏上会这样：第一次点按只把焦点移到按钮上。1.2.0 已修复， 单击即生效；如果你还在旧版本，请重新安装当前 APK。</p>
+<p><strong>Q：测试中途失败，矩阵只出了一部分？</strong> A：1.2.0 起单对超时或绑核失败只会把该对标记为 <code>N/A</code>，其余核心对继续跑完，不再整张矩阵作废。 若大量出现，先让设备空闲、亮屏、切性能模式再测。</p>
 <p><strong>Q：测到一半能停吗？</strong> A：可以。点「停止」后线程会退出，已完成的格子保留，标题显示「已停止 · 部分结果」。</p>
 <p><strong>Q：点导出没反应 / 保存失败。</strong> A：确认在系统文件选择器里选了目录并点了 SAVE；某些定制系统会二次确认。若仍失败， 用界面上的自动保存路径通过数据线取文件。</p>
 <p><strong>Q：安装被 Play Protect 拦截。</strong> A：这是调试签名的自编译应用，选择「仍要安装」即可；不放心可以自己从源码构建。</p>
@@ -170,7 +173,7 @@ Core 3;34.1536;31.998;30.775;x</code></pre>
 <hr>
 <h2>10. 校验、源码与构建</h2>
 <p>APK SHA-256：</p>
-<pre><code>fe4e174639f83fec12c3288fa91ed07e1ac33883a04a48c1bf681d4074e0cda4</code></pre>
+<pre><code>060e8dbda2bcfb83bcba9027b882c922119c558bf2adaa3ebff3abd21cc31e56</code></pre>
 <p>设备上可用 Termux 校验：</p>
 <pre><code>sha256sum CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>源码在 <code>Android-移植/app/</code>：</p>
