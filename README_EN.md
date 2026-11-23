@@ -33,7 +33,7 @@ Notes:
 - **On ARM64 Windows** the launcher itself (x86) runs through the built-in emulation layer, while the embedded ARM64 payload executes natively.
 - **Architecture-adaptive, no version picking.** One file covers two macOS architectures; one file covers three Windows architectures. `--version` and `--list` confirm the program starts on your machine.
 - **HarmonyOS must be signed locally.** The release contains an unsigned HAP and full source; debug certificates/profiles are bound to device UDIDs and cannot be reused. See [HarmonyOS README](harmonyos/README.md).
-- **HarmonyOS compatibility boundary.** Verified on AL00U (Kirin 9000SL, 9 threads / 6 physical cores, HarmonyOS 5.0.0); API 12+ arm64 devices can usually install it, but whether the vendor scheduler allows pinning must be checked on each device — pairs that cannot be pinned are reported as `N/A`. HarmonyOS 4.x, 32-bit ABIs and unverified future devices/SoCs are not covered.
+- **HarmonyOS compatibility boundary.** Verified on nova 12 Ultra (ADA-AL10U, Kirin 9000SL, 9 threads / 6 physical cores, HarmonyOS 7.0.0.111 / API 26); API 12+ arm64 devices can usually install it, but whether the vendor scheduler allows pinning must be checked on each device — pairs that cannot be pinned are reported as `N/A`. HarmonyOS 4.x, 32-bit ABIs and unverified future devices/SoCs are not covered.
 
 > This is an unofficial port and is not affiliated with, or endorsed by, CapFrameX or CXWorld.
 

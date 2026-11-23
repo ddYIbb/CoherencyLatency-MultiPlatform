@@ -1,6 +1,6 @@
 # CoherencyLatency HarmonyOS 版
 
-**状态：** 已在 HarmonyOS 真机（nova 12 Ultra / AL10U，HarmonyOS 5.0.0）跑通，版本 1.2.0。  
+**状态：** 已在 HarmonyOS 真机（nova 12 Ultra 星耀版 / ADA-AL10U，HarmonyOS 7.0.0.111 / API 26）跑通，版本 1.2.0。  
 **发布包：** [v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)（未签名 HAP + 完整源码 + 使用手册 + 自行签名说明）。  
 **许可：** MIT，基于 CapFrameX 的 [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX)。
 
@@ -20,7 +20,7 @@
 
 | 层次 | 内容 |
 |---|---|
-| 已验证 | AL10U（nova 12 Ultra 星耀版，Kirin 9000SL，9 线程 / 6 物理核 / 3 簇，HarmonyOS 5.0.0）：1.2.0 最终验收 72/72、0 N/A、65.28 s，平均 97.9 / 最小 24.5 / 最大 126.6 ns；另在 AL00U 同规格真机上完成开发期验证 |
+| 已验证 | ADA-AL10U（nova 12 Ultra 星耀版，Kirin 9000SL，9 线程 / 6 物理核 / 3 簇，HarmonyOS 7.0.0.111 / API 26）：1.2.0 最终验收 72/72、0 N/A、65.28 s，平均 97.9 / 最小 24.5 / 最大 126.6 ns；另在 AL00U 同规格真机上完成开发期验证 |
 | 设计支持 | HarmonyOS 5.0.0（API 12）及以上；phone / tablet / 2in1；arm64-v8a 真机、x86_64 模拟器；2–20 线程；有/无 SMT、单簇/多簇、大小核/多簇均由 sysfs 实测适配 |
 | 未验证 | HarmonyOS 4.x 及更早；32 位 ABI；未逐台实测的后续机型与新 SoC 的调度行为 |
 

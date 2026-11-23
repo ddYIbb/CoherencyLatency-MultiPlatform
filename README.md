@@ -33,7 +33,7 @@
 - **ARM64 Windows** 上单文件启动器（本身是 x86）通过系统内置的模拟层运行，内部的 ARM64 原生程序直接执行，不经过模拟。
 - **架构自适应，不用选版本。** macOS 一个文件双架构，Windows 一个文件三架构，复制过去即可；`--version` 和 `--list` 可用来确认程序在你的机器上正常启动。
 - **HarmonyOS 需要自行签名。** 发布的是未签名 HAP 与完整源码；调试证书/Profile 绑定设备 UDID，不能通用，签名步骤见 [HarmonyOS README](harmonyos/README.md)。
-- **HarmonyOS 的兼容边界。** 已在 AL00U（Kirin 9000SL，9 线程 / 6 物理核，HarmonyOS 5.0.0）验证；API 12+ 的 arm64 设备通常可安装，但厂商调度器是否允许绑核必须实机确认，绑不住会显示 `N/A`。HarmonyOS 4.x、32 位 ABI 和未逐台实测的新机型尚未验证。
+- **HarmonyOS 的兼容边界。** 已在 nova 12 Ultra 星耀版（ADA-AL10U，Kirin 9000SL，9 线程 / 6 物理核，HarmonyOS 7.0.0.111 / API 26）验证；API 12+ 的 arm64 设备通常可安装，但厂商调度器是否允许绑核必须实机确认，绑不住会显示 `N/A`。HarmonyOS 4.x、32 位 ABI 和未逐台实测的新机型尚未验证。
 
 > 非官方移植项目，与 CapFrameX / CXWorld 没有隶属或背书关系。
 
