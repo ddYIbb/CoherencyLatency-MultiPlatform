@@ -57,6 +57,7 @@ struct Index {
   @State private physicalCount: number = 0;
   @State private smtText: string = '';
   @State private hasSmt: boolean = false;
+  @State private darkMode: boolean = false;
 
   // 缓存矩阵统计量：cells 每次更新只重算一次，避免每个单元格都全表扫描（O(n^4)→O(n^2)）
   private statMin: number = 0;
@@ -74,6 +75,22 @@ struct Index {
   aboutToAppear(): void {
     this.readDevice();
     this.versionText = benchVersion();
+    this.applySystemTheme();
+  }
+
+  onPageShow(): void {
+    this.applySystemTheme();
+  }
+
+  private applySystemTheme(): void {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      // resourceManager.ColorMode.COLOR_MODE_DARK === 0
+      const mode: number = context.resourceManager.getConfigurationSync().colorMode as number;
+      this.darkMode = mode === 0;
+    } catch (error) {
+      this.darkMode = false;
+    }
   }
 
   aboutToDisappear(): void {
@@ -620,6 +637,58 @@ struct Index {
     return text.length === 1 ? '0' + text : text;
   }
 
+  // -------------------------------------------------------------------------
+  // 主题：跟随系统深色 / 浅色
+  // -------------------------------------------------------------------------
+
+  private bgColor(): string {
+    return this.darkMode ? '#121417' : '#F4F6F9';
+  }
+
+  private cardColor(): string {
+    return this.darkMode ? '#1C1F24' : '#FFFFFF';
+  }
+
+  private textPrimary(): string {
+    return this.darkMode ? '#E8EAED' : '#101828';
+  }
+
+  private textSecondary(): string {
+    return this.darkMode ? '#A5ACB8' : '#667085';
+  }
+
+  private textTertiary(): string {
+    return this.darkMode ? '#7C8492' : '#98A2B3';
+  }
+
+  private accentColor(): string {
+    return this.darkMode ? '#3B82F6' : '#2563EB';
+  }
+
+  private accentDark(): string {
+    return this.darkMode ? '#93B4FD' : '#1E40AF';
+  }
+
+  private accentBorder(): string {
+    return this.darkMode ? '#2F4A7D' : '#BFD3FE';
+  }
+
+  private lineColor(): string {
+    return this.darkMode ? '#333941' : '#E4E7EC';
+  }
+
+  private stopColor(): string {
+    return this.darkMode ? '#262A30' : '#F2F4F7';
+  }
+
+  private cellEmptyColor(): string {
+    return this.darkMode ? '#262A30' : '#F2F4F7';
+  }
+
+  private cellDiagonalColor(): string {
+    return this.darkMode ? '#23272D' : '#EEF2F6';
+  }
+
   private cellText(row: number, column: number): string {
     if (row === column) {
       return 'x';
@@ -636,28 +705,28 @@ struct Index {
 
   private cellBackground(row: number, column: number): string {
     if (row === column) {
-      return '#EEF2F6';
+      return this.cellDiagonalColor();
     }
     const value: number = this.cells[row * this.n + column];
     if (Number.isNaN(value)) {
       return '#D92D20';
     }
     if (value <= 0) {
-      return '#F2F4F7';
+      return this.cellEmptyColor();
     }
     return this.heatColor(value, this.minimum(), this.maximum());
   }
 
   private cellForeground(row: number, column: number): string {
     if (row === column) {
-      return TEXT_TERTIARY;
+      return this.textTertiary();
     }
     const value: number = this.cells[row * this.n + column];
     if (Number.isNaN(value)) {
       return '#FFFFFF';
     }
     if (value <= 0) {
-      return TEXT_TERTIARY;
+      return this.textTertiary();
     }
     return '#FFFFFF';
   }
@@ -712,7 +781,7 @@ struct Index {
     Text(label)
       .fontSize(12)
       .fontWeight(FontWeight.Medium)
-      .fontColor(TEXT_TERTIARY)
+      .fontColor(this.textTertiary())
       .letterSpacing(1)
       .margin({ bottom: 8 })
   }
@@ -723,14 +792,14 @@ struct Index {
       this.sectionTitle('设备信息')
       Text(this.logicalCores + ' 个逻辑线程 · ' + this.cacheLine + ' B 缓存行 · ' + this.abi)
         .fontSize(13)
-        .fontColor(TEXT_SECONDARY)
+        .fontColor(this.textSecondary())
         .fontFamily('monospace')
         .width('100%')
       if (this.physicalCount > 0) {
         Text('物理核 ' + this.physicalCount + ' 个' + (this.hasSmt ?
           ' · 同核超线程：' + this.smtText : ''))
           .fontSize(11.5)
-          .fontColor(TEXT_SECONDARY)
+          .fontColor(this.textSecondary())
           .margin({ top: 6 })
           .width('100%')
       }
@@ -738,32 +807,32 @@ struct Index {
         Text('可稳定绑定 ' + this.n + ' 个线程，另有 ' +
           (this.logicalCores - this.n) + ' 个线程未纳入矩阵（系统限制）')
           .fontSize(11.5)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 6 })
           .width('100%')
       }
       if (this.hasSmt) {
         Text('测量对象：' + this.coreLabel() + ' 共 ' + this.n + ' 个逻辑线程；同核两个线程之间的延迟通常约 30 ns')
           .fontSize(11.5)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 6 })
           .width('100%')
       }
       Text('固定参数：' + this.n + ' 个逻辑线程 · 1,000,000 次 · 3 轮 · Bounce')
         .fontSize(11.5)
-        .fontColor(TEXT_TERTIARY)
+        .fontColor(this.textTertiary())
         .margin({ top: 6 })
         .width('100%')
       Text(this.versionText)
         .fontSize(11)
-        .fontColor(TEXT_TERTIARY)
+        .fontColor(this.textTertiary())
         .margin({ top: 4 })
         .width('100%')
     }
     .alignItems(HorizontalAlign.Start)
     .padding(16)
     .width('100%')
-    .backgroundColor(CARD)
+    .backgroundColor(this.cardColor())
     .borderRadius(14)
     .margin({ top: 16 })
   }
@@ -775,12 +844,12 @@ struct Index {
         Text(this.caption)
           .fontSize(12)
           .fontWeight(FontWeight.Medium)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .letterSpacing(1)
         Blank()
         Text(this.donePairs + '/' + Math.max(0, this.totalPairs))
           .fontSize(11.5)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
       }
       .width('100%')
       .margin({ bottom: 10 })
@@ -793,7 +862,7 @@ struct Index {
             ForEach(this.indices(), (column: number) => {
               Text(this.coreHeading(column))
                 .fontSize(this.matrixHeaderFontSize())
-                .fontColor(TEXT_TERTIARY)
+                .fontColor(this.textTertiary())
                 .width(this.matrixCellWidth())
                 .textAlign(TextAlign.Center)
                 .margin({ right: this.matrixCellGap() })
@@ -805,7 +874,7 @@ struct Index {
             Row() {
               Text(this.coreHeading(row))
                 .fontSize(this.matrixHeaderFontSize())
-                .fontColor(TEXT_TERTIARY)
+                .fontColor(this.textTertiary())
                 .width(this.matrixLabelWidth())
               ForEach(this.indices(), (column: number) => {
                 Text(this.cellText(row, column))
@@ -828,7 +897,7 @@ struct Index {
       .width('100%')
 
       Row() {
-        Text('低').fontSize(10.5).fontColor(TEXT_TERTIARY)
+        Text('低').fontSize(10.5).fontColor(this.textTertiary())
         Row()
           .width(72)
           .height(6)
@@ -838,12 +907,12 @@ struct Index {
             colors: [['#12B76A', 0.0], ['#F79009', 0.5], ['#F04438', 1.0]]
           })
           .margin({ left: 6, right: 6 })
-        Text('高').fontSize(10.5).fontColor(TEXT_TERTIARY)
+        Text('高').fontSize(10.5).fontColor(this.textTertiary())
         Blank()
         Text('平均 ' + this.average().toFixed(1) + ' · 最小 ' + this.minimum().toFixed(1) +
           ' · 最大 ' + this.maximum().toFixed(1) + ' ns')
           .fontSize(10.5)
-          .fontColor(TEXT_SECONDARY)
+          .fontColor(this.textSecondary())
       }
       .width('100%')
       .margin({ top: 10 })
@@ -851,14 +920,14 @@ struct Index {
       if (this.countNaPairs() > 0) {
         Text('N/A = 该线程对未能精确绑定到指定逻辑线程')
           .fontSize(11)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 6 })
           .width('100%')
       }
       if (this.hasSmt) {
         Text('带 * 的线程互为同核超线程（' + this.smtText + '）；这些格子通常约 30 ns')
           .fontSize(11)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 6 })
           .width('100%')
       }
@@ -866,7 +935,7 @@ struct Index {
     .alignItems(HorizontalAlign.Start)
     .padding(this.n >= 9 ? 8 : 12)
     .width('100%')
-    .backgroundColor(CARD)
+    .backgroundColor(this.cardColor())
     .borderRadius(14)
     .margin({ top: 16 })
   }
@@ -878,11 +947,11 @@ struct Index {
         Text('CoherencyLatency')
           .fontSize(27)
           .fontWeight(FontWeight.Bold)
-          .fontColor(TEXT_PRIMARY)
+          .fontColor(this.textPrimary())
           .width('100%')
         Text('缓存一致性延迟测试 · HarmonyOS 原生版')
           .fontSize(13)
-          .fontColor(TEXT_SECONDARY)
+          .fontColor(this.textSecondary())
           .margin({ top: 2 })
           .width('100%')
 
@@ -893,7 +962,7 @@ struct Index {
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFF')
-            .backgroundColor(ACCENT)
+            .backgroundColor(this.accentColor())
             .borderRadius(12)
             .height(48)
             .layoutWeight(2)
@@ -906,10 +975,10 @@ struct Index {
           Button('停止')
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
-            .fontColor(TEXT_PRIMARY)
-            .backgroundColor(STOP_BACKGROUND)
+            .fontColor(this.textPrimary())
+            .backgroundColor(this.stopColor())
             .borderRadius(12)
-            .border({ width: 1, color: BORDER })
+            .border({ width: 1, color: this.lineColor() })
             .height(48)
             .layoutWeight(1)
             .margin({ left: 10 })
@@ -923,15 +992,15 @@ struct Index {
         .margin({ top: 16 })
 
         Progress({ value: this.donePairs, total: Math.max(1, this.totalPairs), type: ProgressType.Linear })
-          .color(ACCENT)
-          .backgroundColor(BORDER)
+          .color(this.accentColor())
+          .backgroundColor(this.lineColor())
           .height(6)
           .width('100%')
           .margin({ top: 18 })
 
         Text(this.statusText)
           .fontSize(12.5)
-          .fontColor(TEXT_SECONDARY)
+          .fontColor(this.textSecondary())
           .margin({ top: 8 })
           .width('100%')
 
@@ -941,10 +1010,10 @@ struct Index {
           Button('复制 CSV')
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
-            .fontColor(ACCENT)
-            .backgroundColor(CARD)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.cardColor())
             .borderRadius(12)
-            .border({ width: 1, color: ACCENT_BORDER })
+            .border({ width: 1, color: this.accentBorder() })
             .height(48)
             .layoutWeight(1)
             .enabled(this.hasResult && !this.running)
@@ -956,10 +1025,10 @@ struct Index {
           Button('另存一份')
             .fontSize(15)
             .fontWeight(FontWeight.Bold)
-            .fontColor(ACCENT_DARK)
-            .backgroundColor(CARD)
+            .fontColor(this.accentDark())
+            .backgroundColor(this.cardColor())
             .borderRadius(12)
-            .border({ width: 1, color: ACCENT_BORDER })
+            .border({ width: 1, color: this.accentBorder() })
             .height(48)
             .layoutWeight(1)
             .margin({ left: 10 })
@@ -974,13 +1043,13 @@ struct Index {
 
         Text(this.savedMessage)
           .fontSize(11.5)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 6 })
           .width('100%')
 
         Text('数值是每次原子操作的往返延迟，越低越好。导出后可导入表格软件。')
           .fontSize(11.5)
-          .fontColor(TEXT_TERTIARY)
+          .fontColor(this.textTertiary())
           .margin({ top: 18 })
           .width('100%')
       }
@@ -991,6 +1060,6 @@ struct Index {
     .scrollBar(BarState.Auto)
     .width('100%')
     .height('100%')
-    .backgroundColor(BACKGROUND)
+    .backgroundColor(this.bgColor())
   }
 }
