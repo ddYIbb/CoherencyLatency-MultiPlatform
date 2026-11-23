@@ -7,8 +7,9 @@
 - **macOS** — macOS 10.7 Lion 或更高版本（Intel 与 Apple Silicon 通用二进制）
 - **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11（x86 / x64 / ARM64）
 - **Android** — Android 4.1（API 16）或更高版本（命令行版四个 ABI；图形界面版为通用 APK）
+- **HarmonyOS** — HarmonyOS 5.0.0（API 12）或更高版本（手机 / 平板 / 2in1，arm64-v8a）
 
-本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS、Windows 与 Android 三个平台的成品。
+本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS、Windows、Android 与 HarmonyOS 四个平台的成品。HarmonyOS 版以未签名 HAP + 完整源码发布，需要自行签名后安装；其余三个平台是独立编译的成品。
 
 ## 系统兼容性
 
@@ -20,6 +21,7 @@
 | Windows | `CoherencyLatency-Windows-v1.1.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
 | Android（命令行） | `CoherencyLatency-Android-v1.1.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
 | Android（图形界面） | `CoherencyLatency-Android-UI-v1.1.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
+| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.6.zip`（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、平板、2in1；动态识别 2–20 个逻辑线程 |
 
 几点说明：
 
@@ -28,6 +30,8 @@
 - **兼容旧系统的方式。** macOS 版不依赖较新系统才有的 C++ 运行库符号，10.10+ 才有的 QoS API 通过运行时 `dlsym` 动态获取、老系统自动跳过；Windows 版链接 `SUBSYSTEM 6.0` 并静态链接 CRT。
 - **ARM64 Windows** 上单文件启动器（本身是 x86）通过系统内置的模拟层运行，内部的 ARM64 原生程序直接执行，不经过模拟。
 - **架构自适应，不用选版本。** macOS 一个文件双架构，Windows 一个文件三架构，复制过去即可；`--version` 和 `--list` 可用来确认程序在你的机器上正常启动。
+- **HarmonyOS 需要自行签名。** 发布的是未签名 HAP 与完整源码；调试证书/Profile 绑定设备 UDID，不能通用，签名步骤见 [HarmonyOS README](harmonyos/README.md)。
+- **HarmonyOS 的兼容边界。** 已在 AL00U（Kirin 9000SL，9 线程 / 6 物理核，HarmonyOS 5.0.0）验证；API 12+ 的 arm64 设备通常可安装，但厂商调度器是否允许绑核必须实机确认，绑不住会显示 `N/A`。HarmonyOS 4.x、32 位 ABI 和未逐台实测的新机型尚未验证。
 
 > 非官方移植项目，与 CapFrameX / CXWorld 没有隶属或背书关系。
 
@@ -35,7 +39,7 @@
 
 ## 下载
 
-最新版本：[v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0)
+最新版本：macOS / Windows / Android 为 [v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0)；HarmonyOS 为 [v1.2.6](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.6)。
 
 | 平台 | Release 文件 |
 |---|---|
@@ -43,6 +47,7 @@
 | Windows | [CoherencyLatency-Windows-v1.1.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Windows-v1.1.0.exe) |
 | Android（命令行） | [CoherencyLatency-Android-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-v1.1.0.zip) |
 | Android（图形界面） | [CoherencyLatency-Android-UI-v1.1.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-UI-v1.1.0.apk) |
+| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.6.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.6/CoherencyLatency-HarmonyOS-v1.2.6.zip) |
 
 macOS 版下载后解压得到一个可执行文件。如果首次打开被 Gatekeeper 拦截，请右键选择“打开”，或执行 `xattr -dr com.apple.quarantine CoherencyLatency` 清除隔离属性。
 
@@ -50,7 +55,9 @@ Windows 版是一个单文件 `.exe`：启动时自动选择与当前 Windows �
 
 Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件，适合 Termux 或 `adb shell`；图形界面版是单个 APK，手机、平板、圆形手表和 Android TV 通用。两者都支持 Android 4.1（API 16）及以上。
 
-详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）、[Windows 使用说明](docs/Windows-使用说明.md)、[Android 命令行使用手册](android/docs/使用手册.md)（[PDF](android/docs/使用手册.pdf)）和 [Android APK 使用说明](android/docs/APK使用说明.md)（[PDF](android/docs/APK使用说明.pdf)）。
+HarmonyOS 版下载后解压，得到未签名 HAP、完整源码、使用手册和《自行签名说明.md》。未签名 HAP 不能直接安装；请先按说明用 DevEco Studio 或 `hap-sign-tool` 签名。
+
+详细的中文使用说明见 [macOS 使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）、[Windows 使用说明](docs/Windows-使用说明.md)、[Android 命令行使用手册](android/docs/使用手册.md)（[PDF](android/docs/使用手册.pdf)）、[Android APK 使用说明](android/docs/APK使用说明.md)（[PDF](android/docs/APK使用说明.pdf)）和 [HarmonyOS 使用手册](harmonyos/docs/使用手册.md)（[PDF](harmonyos/docs/使用手册.pdf)）。
 
 ## 与原项目的关系
 
@@ -58,12 +65,12 @@ Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件
 
 | | [MicroBenchX CoherencyLatency](https://github.com/CXWorld/MicroBenchX) | CoherencyLatency-MultiPlatform（本仓库） |
 |---|---|---|
-| 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows、Android |
-| 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter`，Android 用 `clock_gettime(CLOCK_MONOTONIC)` |
-| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask` 并用 `GetCurrentProcessorNumber` 校验落点；Android 用 `sched_setaffinity` 并用 `sched_getcpu` 校验落点；macOS 使用尽力而为的 QoS 提示 |
+| 平台 | Windows（官方 v1.0.5 发布版） | macOS、Windows、Android、HarmonyOS |
+| 计时 | `QueryPerformanceCounter` | macOS 用 `mach_absolute_time`，Windows 用 `QueryPerformanceCounter`，Android 与 HarmonyOS 用 `clock_gettime(CLOCK_MONOTONIC)` |
+| CPU 亲和性 | Windows 线程亲和性 | Windows 用 `SetThreadAffinityMask` 并用 `GetCurrentProcessorNumber` 校验落点；Android 用 `sched_setaffinity` 并用 `sched_getcpu` 校验落点；HarmonyOS 用 `sched_setaffinity` 绑核并用 `sched_getcpu` 校验落点，绑不住显示 `N/A`；macOS 使用尽力而为的 QoS 提示 |
 | 线程 | 每次 run 都新建两个线程 | 每个核心对复用两个线程，逐轮同步 |
 | 矩阵内存 | O(n² × runs) 采样缓冲 | O(n²) 矩阵，在线取最小值，缓存行对象放在栈上 |
-| 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本，Android 用 NDK r21e clang 脚本 |
+| 构建 | Visual Studio 解决方案 | macOS 用 CMake，Windows 用 MSVC 批处理脚本，Android 用 NDK r21e clang 脚本，HarmonyOS 用 DevEco Studio / hvigor |
 
 ## 本移植版新增的内容
 
@@ -72,6 +79,8 @@ Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件
 **Windows 单文件启动器。** 启动器把 Windows 原生程序作为资源嵌入同一个 exe。运行时释放匹配当前系统的程序到临时文件，执行完毕后删除。因此只需要一个可执行文件。
 
 **Android 原生移植。** 命令行版用 NDK r21e 交叉编译为 arm64-v8a、armv7、x86、x86_64 四个 ABI，32 位最低 Android 4.1（API 16）；图形界面版是同一个 APK 内含四个原生库，手机、平板、圆形手表和 Android TV 自动适配。Android 版同样使用 `sched_setaffinity` 绑定核心并用 `sched_getcpu` 复核，绑核失败的核心对显示 `N/A`。
+
+**HarmonyOS 原生移植。** 测量核心用 C++ NAPI 模块，界面用 ArkTS；启动时探测可绑定逻辑线程，按实际线程数动态构建 2–20 的 N×N 矩阵；从 sysfs 读取 SMT、簇和最高性能核，无机型白名单；绑核失败或测量期间线程迁移的线程对显示 `N/A`。发布未签名 HAP 与完整源码，需自行签名后安装。
 
 **修复最小值统计。** 原版源码在最小值判断循环里多了一个分号，导致结果实际取的是最后一次 run，而不是最快的 run。本移植版改为在所有 run 中取最小值。
 
@@ -122,6 +131,7 @@ Android 命令行版是一个 zip，解压后得到四个 ABI 的可执行文件
 - CMake 3.20 或更高版本
 - Windows 需要 Visual Studio 2022 或更新版本，并勾选 **使用 C++ 的桌面开发** 工作负载；单文件启动器还需要 CMake 3.20 或更高版本
 - Android 需要 NDK r21e、Android SDK build-tools 31.0.0、platforms/android-31 和 JDK 17
+- HarmonyOS 需要 DevEco Studio 5.0 或更新版本，以及 HarmonyOS SDK API 12+（工程 compatibleSdkVersion 5.0.0(12)）
 
 项目不依赖第三方库，只使用 C++17 标准库和平台 API。
 
@@ -204,9 +214,21 @@ python build_apk.py
 
 `build_cli.py` 默认使用 `D:\ndk21\android-ndk-r21e`；`build_apk.py` 默认使用 `D:/AndroidTools` 下的 JDK 17 与 Android SDK，可通过 `JAVA_HOME`、`ANDROID_SDK_ROOT`、`ANDROID_NDK_ROOT` 覆盖。
 
+### HarmonyOS
+
+用 DevEco Studio 打开 `harmonyos/`，修改 `AppScope/app.json5` 里的 `bundleName`，配置签名后 Build。命令行构建：
+
+```bash
+export DEVECO_SDK_HOME="/path/to/DevEco Studio/sdk"
+node "/path/to/DevEco Studio/tools/hvigor/bin/hvigorw.js" \
+  --mode module -p product=default assembleHap --no-daemon
+```
+
+产物为 `harmonyos/entry/build/default/outputs/default/entry-default-unsigned.hap`。仓库不包含签名证书；签名和安装步骤见 [harmonyos/README.md](harmonyos/README.md)。
+
 ## 第三方组件
 
-无。项目只使用 C++17 标准库和平台 API（macOS 的 `pthread` 与 Mach API，Windows 的 Win32 API），编译和运行都不需要安装第三方库。
+无。项目只使用 C++17 标准库和平台 API（macOS 的 `pthread` 与 Mach API，Windows 的 Win32 API，HarmonyOS 的 pthread / libc / QoS API），编译和运行都不需要安装第三方库。
 
 ## 许可协议
 

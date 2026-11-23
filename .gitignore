@@ -43,3 +43,11 @@ Thumbs.db
 /android/CoherencyLatency-Android-UI-*.apk
 /CoherencyLatency-*.zip
 /CoherencyLatency-*.exe
+
+# HarmonyOS build trees and local signing files
+/harmonyos/.hvigor/
+/harmonyos/oh_modules/
+/harmonyos/build/
+/harmonyos/entry/build/
+/harmonyos/entry/.preview/
+/harmonyos/local.properties

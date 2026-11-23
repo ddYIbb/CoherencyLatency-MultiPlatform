@@ -7,8 +7,9 @@ A multi-platform collection of ports of `CoherencyLatency`, the cache-coherency 
 - **macOS** — macOS 10.7 Lion or later (universal binary for Intel and Apple Silicon)
 - **Windows** — Windows Vista SP2 / 7 / 8 / 8.1 / 10 / 11 (x86 / x64 / ARM64)
 - **Android** — Android 4.1 (API 16) or later (four ABIs for the CLI build; one universal APK for the GUI build)
+- **HarmonyOS** — HarmonyOS 5.0.0 (API 12) or later (phones / tablets / 2-in-1, arm64-v8a)
 
-This repository contains the cross-platform source tree and publishes macOS, Windows and Android builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases).
+This repository contains the cross-platform source tree and publishes macOS, Windows, Android and HarmonyOS builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases). The HarmonyOS release is an unsigned HAP plus full source and must be signed locally; the other three platforms are separately built binaries.
 
 ## System compatibility
 
@@ -20,6 +21,7 @@ None of the downloads requires installing any runtime — copy it over and it ru
 | Windows | `CoherencyLatency-Windows-v1.1.0.exe` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | A single-file launcher that auto-matches native x86, x64 and ARM64 payloads; the x86 build targets the plain 32-bit baseline (SSE2 not even required), x64/ARM64 use their base instruction sets |
 | Android (CLI) | `CoherencyLatency-Android-v1.1.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
 | Android (GUI) | `CoherencyLatency-Android-UI-v1.1.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
+| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.6.zip` (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phones, tablets and 2-in-1; detects 2–20 logical threads at runtime |
 
 Notes:
 
@@ -28,6 +30,8 @@ Notes:
 - **How old systems are supported.** The macOS build avoids newer C++ runtime symbols, resolves the 10.10+ QoS API at runtime via `dlsym` (skipped on older systems), and links `SUBSYSTEM 6.0` with a static CRT on Windows.
 - **On ARM64 Windows** the launcher itself (x86) runs through the built-in emulation layer, while the embedded ARM64 payload executes natively.
 - **Architecture-adaptive, no version picking.** One file covers two macOS architectures; one file covers three Windows architectures. `--version` and `--list` confirm the program starts on your machine.
+- **HarmonyOS must be signed locally.** The release contains an unsigned HAP and full source; debug certificates/profiles are bound to device UDIDs and cannot be reused. See [HarmonyOS README](harmonyos/README.md).
+- **HarmonyOS compatibility boundary.** Verified on AL00U (Kirin 9000SL, 9 threads / 6 physical cores, HarmonyOS 5.0.0); API 12+ arm64 devices can usually install it, but whether the vendor scheduler allows pinning must be checked on each device — pairs that cannot be pinned are reported as `N/A`. HarmonyOS 4.x, 32-bit ABIs and unverified future devices/SoCs are not covered.
 
 > This is an unofficial port and is not affiliated with, or endorsed by, CapFrameX or CXWorld.
 
@@ -35,7 +39,7 @@ Notes:
 
 ## Download
 
-The latest release is [v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0):
+Latest releases: [v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0) for macOS / Windows / Android, and [v1.2.6](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.6) for HarmonyOS:
 
 | Platform | Release asset |
 |---|---|
@@ -43,6 +47,7 @@ The latest release is [v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiP
 | Windows | [CoherencyLatency-Windows-v1.1.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Windows-v1.1.0.exe) |
 | Android (CLI) | [CoherencyLatency-Android-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-v1.1.0.zip) |
 | Android (GUI) | [CoherencyLatency-Android-UI-v1.1.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-UI-v1.1.0.apk) |
+| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.6.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.6/CoherencyLatency-HarmonyOS-v1.2.6.zip) |
 
 The macOS download is a zip containing a native executable. If Gatekeeper blocks the first launch, right-click the file and choose **Open**, or remove the quarantine attribute with `xattr -dr com.apple.quarantine CoherencyLatency`.
 
@@ -50,7 +55,9 @@ The Windows download is a single `.exe`: it runs the native program matching the
 
 The Android CLI build is a zip with four ABI executables for Termux or `adb shell`; the GUI build is a single APK for phones, tablets, round watches and Android TV. Both support Android 4.1 (API 16) or later.
 
-Chinese documentation is available for all platforms: [macOS 使用手册](docs/使用手册.md) ([PDF](docs/使用手册.pdf)), [Windows 使用说明](docs/Windows-使用说明.md), [Android CLI 使用手册](android/docs/使用手册.md) ([PDF](android/docs/使用手册.pdf)) and [Android APK 使用说明](android/docs/APK使用说明.md) ([PDF](android/docs/APK使用说明.pdf)).
+The HarmonyOS download is a zip containing an unsigned HAP, full source, the manual and a signing guide. The unsigned HAP cannot be installed directly; sign it with DevEco Studio or `hap-sign-tool` first.
+
+Chinese documentation is available for all platforms: [macOS 使用手册](docs/使用手册.md) ([PDF](docs/使用手册.pdf)), [Windows 使用说明](docs/Windows-使用说明.md), [Android CLI 使用手册](android/docs/使用手册.md) ([PDF](android/docs/使用手册.pdf)), [Android APK 使用说明](android/docs/APK使用说明.md) ([PDF](android/docs/APK使用说明.pdf)) and [HarmonyOS 使用手册](harmonyos/docs/使用手册.md) ([PDF](harmonyos/docs/使用手册.pdf)).
 
 ## Relationship to the original
 
@@ -58,12 +65,12 @@ This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` mo
 
 | | [MicroBenchX CoherencyLatency](https://github.com/CXWorld/MicroBenchX) | CoherencyLatency-MultiPlatform (this repository) |
 |---|---|---|
-| Platforms | Windows (official v1.0.5 release) | macOS, Windows, Android |
-| Timing | `QueryPerformanceCounter` | `mach_absolute_time` on macOS, `QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Android |
-| CPU affinity | Windows thread affinity | `SetThreadAffinityMask` plus a `GetCurrentProcessorNumber` check on Windows; `sched_setaffinity` plus a `sched_getcpu` check on Android; best-effort QoS hint on macOS |
+| Platforms | Windows (official v1.0.5 release) | macOS, Windows, Android, HarmonyOS |
+| Timing | `QueryPerformanceCounter` | `mach_absolute_time` on macOS, `QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Android and HarmonyOS |
+| CPU affinity | Windows thread affinity | `SetThreadAffinityMask` plus a `GetCurrentProcessorNumber` check on Windows; `sched_setaffinity` plus a `sched_getcpu` check on Android and HarmonyOS, with failed pins reported as `N/A`; best-effort QoS hint on macOS |
 | Threads | Two new threads per run | Two threads per pair, reused across runs |
 | Matrix memory | O(n² × runs) sample buffer | O(n²) matrix, online minimum, stack-allocated cache-line cells |
-| Build | Visual Studio solution | CMake for macOS, MSVC batch scripts for Windows, NDK r21e clang scripts for Android |
+| Build | Visual Studio solution | CMake for macOS, MSVC batch scripts for Windows, NDK r21e clang scripts for Android, DevEco Studio / hvigor for HarmonyOS |
 
 ## What this port adds
 
@@ -72,6 +79,8 @@ This is a port, not a small patch. The benchmark idea, the `bounce` / `owned` mo
 **Windows single-file launcher.** The launcher embeds the Windows native program as a resource. It extracts the program matching the current Windows installation to a temporary file, runs it, and removes it on exit. Releases are therefore a single `.exe`.
 
 **Native Android port.** The CLI build is cross-compiled with NDK r21e into four ABIs (arm64-v8a, armv7, x86, x86_64), with 32-bit builds supporting Android 4.1 (API 16) and later. The GUI build packs the same four native libraries into one APK that adapts to phones, tablets, round watches and Android TV. The Android build also pins with `sched_setaffinity` and verifies placement with `sched_getcpu`; pairs that fail to pin are reported as `N/A`.
+
+**Native HarmonyOS port.** The measurement core is a C++ NAPI module and the UI is ArkTS. At startup it probes pinnable logical threads and builds a dynamic N×N matrix (2–20 threads), reads SMT, cluster and top-performance cores from sysfs without a model whitelist, and reports `N/A` for pairs that cannot be pinned or migrate during measurement. The release is an unsigned HAP plus source; sign it locally before installing.
 
 **Fixed minimum statistic.** The original source contains a stray semicolon in the minimum-selection loop, which makes the reported result depend on the last run rather than the fastest one. This port takes the minimum over every run, as intended.
 
@@ -122,6 +131,7 @@ Requirements:
 - CMake 3.20 or newer
 - For Windows: Visual Studio 2022 or newer with the **Desktop development with C++** workload, plus CMake 3.20 or newer for the launcher
 - For Android: NDK r21e, Android SDK build-tools 31.0.0, platforms/android-31 and JDK 17
+- For HarmonyOS: DevEco Studio 5.0 or newer with HarmonyOS SDK API 12+ (the project uses compatibleSdkVersion 5.0.0(12))
 
 No third-party libraries are needed; the project uses only the C++17 standard library and platform APIs.
 
@@ -204,9 +214,21 @@ python build_apk.py
 
 `build_cli.py` defaults to `D:\ndk21\android-ndk-r21e`; `build_apk.py` defaults to the JDK 17 and Android SDK under `D:/AndroidTools`. Override with `JAVA_HOME`, `ANDROID_SDK_ROOT` and `ANDROID_NDK_ROOT`.
 
+### HarmonyOS
+
+Open `harmonyos/` in DevEco Studio, change `bundleName` in `AppScope/app.json5`, configure signing and build. Command-line build:
+
+```bash
+export DEVECO_SDK_HOME="/path/to/DevEco Studio/sdk"
+node "/path/to/DevEco Studio/tools/hvigor/bin/hvigorw.js" \
+  --mode module -p product=default assembleHap --no-daemon
+```
+
+The output is `harmonyos/entry/build/default/outputs/default/entry-default-unsigned.hap`. The repository contains no signing certificate; see [harmonyos/README.md](harmonyos/README.md) for signing and installation.
+
 ## Third-party components
 
-None. The port uses only the C++17 standard library and the platform APIs (`pthread` and Mach on macOS, Win32 on Windows). No external libraries need to be installed to build or run it.
+None. The port uses only the C++17 standard library and the platform APIs (`pthread` and Mach on macOS, Win32 on Windows, pthread / libc / QoS on HarmonyOS). No external libraries need to be installed to build or run it.
 
 ## Licence
 
