@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>CoherencyLatency Android 图形界面版 · 使用说明</h1>
-<p><strong>版本：</strong> 1.2.0（versionName <code>1.2.0</code>，versionCode 5，2026-11-23 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.2.0.apk</code>（529,559 B / 517.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5） <strong>本次修订：</strong> 64 位库按 16 KB 页面对齐（Android 15+ 设备不再提示兼容性警告）、移除可调试标记、修复触摸屏按钮需要点两次的问题</p>
+<p><strong>版本：</strong> 1.2.0（versionName <code>1.2.0</code>，versionCode 5，2026-11-23 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.2.0.apk</code>（533,655 B / 521.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5） <strong>本次修订：</strong> 64 位库按 16 KB 页面对齐（Android 15+ 设备不再提示兼容性警告）、移除可调试标记、修复触摸屏按钮需要点两次的问题</p>
 <hr>
 <h2>1. 这是什么</h2>
 <p><code>CoherencyLatency</code> 测量一条缓存行在两个逻辑 CPU 之间来回传递需要多少纳秒。它来自 <a href="https://github.com/CXWorld/MicroBenchX">MicroBenchX v1.0.5</a> 的 <code>CoherencyLatency</code>，本 APK 是它的 Android 原生移植版， 测量核心用 C++ 写成（<code>libclbench.so</code>），外面套一层轻量 Java 界面：</p>
@@ -62,6 +62,7 @@ adb install -r CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>Android 4.1 实测截图（480×800 模拟器，API 16）：</p>
 <p><img alt="Android 4.1 完成" src="screenshots/apk-16-android41.png"></p>
 <p>Android 4.1 上界面用的是系统自带的 Holo 主题（Android 5.0+ 自动换成 Material）， 功能、矩阵、CSV 与高版本完全一致。</p>
+<p>界面会跟随系统的深色模式：系统切到深色后，背景、卡片、文字、边框和进度条一起换成深色配色，热力矩阵的绿→黄→红刻度和色条保持不变（它们是数据刻度，不随主题变）。切换主题时 Activity 会重建，正在跑的测试会被中断，建议跑之前先确认主题。</p>
 <hr>
 <h2>3. 界面说明</h2>
 <h3>3.1 手机（竖屏单列）</h3>
