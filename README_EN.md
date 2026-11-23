@@ -9,7 +9,9 @@ A multi-platform collection of ports of `CoherencyLatency`, the cache-coherency 
 - **Android** — Android 4.1 (API 16) or later (four ABIs for the CLI build; one universal APK for the GUI build)
 - **HarmonyOS** — HarmonyOS 5.0.0 (API 12) or later (phones / tablets / 2-in-1, arm64-v8a)
 
-This repository contains the cross-platform source tree and publishes macOS, Windows, Android and HarmonyOS builds in [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases). The HarmonyOS release is an unsigned HAP plus full source and must be signed locally; the other three platforms are separately built binaries.
+This repository applies the same measurement principles on four platforms while keeping each platform's threading, affinity, timing and packaging independent. [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) archive build artifacts; they are not evidence of cross-platform capability. The HarmonyOS release is an unsigned HAP plus full source and must be signed locally.
+
+The cross-platform lessons from the HarmonyOS port — verifying the actual landing CPU, reading topology dynamically without a model whitelist, refreshing the UI only on results, and reporting unpinnable pairs as N/A — together with their current status on Windows / macOS / Android, are documented in [移植经验与跨平台落点](docs/移植经验.md) (Chinese).
 
 ## System compatibility
 
