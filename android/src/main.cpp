@@ -93,6 +93,14 @@ constexpr std::size_t kAtomicAlignment =
 // per-run cost and the address-space footprint low on both platforms.
 constexpr std::size_t kWorkerStackBytes = 128 * 1024;
 
+// A round performs 2 * iterations handoffs, so its length depends on the
+// device and on the core pair.  A fixed 500 ms budget aborted the whole matrix
+// on parts where a slow pair needs longer than that; the first round gets a
+// generous ceiling and every later round is budgeted from the measured first
+// round.  A stalled round fails its own pair only, and is reported as N/A.
+constexpr std::uint64_t kFirstRoundTimeoutMs = 20000;
+constexpr std::uint64_t kMinimumRoundTimeoutMs = 5000;
+
 struct alignas(kAtomicAlignment) AtomicCell {
     std::atomic<std::uint64_t> value;
 
@@ -874,7 +882,17 @@ private:
 struct PairOutcome {
     float latency_ns = std::numeric_limits<float>::quiet_NaN();
     bool affinity_ok = false;
+    // True when this pair alone failed (a stalled round, a clock that did not
+    // advance, a thread that could not be created).  The cell becomes N/A and
+    // the remaining pairs still run.
+    bool failed = false;
 };
+
+PairOutcome failed_pair() {
+    PairOutcome outcome;
+    outcome.failed = true;
+    return outcome;
+}
 
 // Runs all samples of one core pair and returns the fastest one, which is the
 // same statistic the original computed by storing n*n*runs values and taking
@@ -928,7 +946,9 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         if (thread2.joinable()) {
             thread2.join();
         }
-        throw;
+        // A thread that cannot be created fails this pair only: the remaining
+        // pairs are still measurable.
+        return failed_pair();
     }
 
     {
@@ -939,7 +959,21 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         });
     }
 
+    // A worker that could not be pinned is reported as N/A no matter what the
+    // measurement returns, and measuring anyway is not just wasted time: both
+    // workers then share one CPU, so every handoff waits for a scheduler turn
+    // and a million iterations can take minutes.  Stop before the first round.
+    if (use_affinity && (!config1.affinity_ok || !config2.affinity_ok)) {
+        gate.abort.store(true, std::memory_order_release);
+        gate.round_go.store(config1.rounds, std::memory_order_release);
+        gate.cv.notify_all();
+        thread1.join();
+        thread2.join();
+        return failed_pair();
+    }
+
     float minimum = std::numeric_limits<float>::infinity();
+    std::chrono::milliseconds round_timeout(kFirstRoundTimeoutMs);
     try {
         for (int round = 0; round < config1.rounds; ++round) {
             // Both workers are waiting for the next round here, so the shared
@@ -956,7 +990,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
                 // end timestamps, so nothing is lost by waiting in the kernel.
                 // The timeout only guards against a worker that died.
                 std::unique_lock<std::mutex> lock(gate.mutex);
-                gate.cv.wait_for(lock, std::chrono::milliseconds(500), [&gate, round] {
+                gate.cv.wait_for(lock, round_timeout, [&gate, round] {
                     return gate.round_done.load(std::memory_order_acquire) >=
                                2 * (round + 1) ||
                            gate.abort.load(std::memory_order_acquire);
@@ -964,14 +998,31 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             }
             if (gate.round_done.load(std::memory_order_acquire) <
                 2 * (round + 1)) {
-                throw std::runtime_error("benchmark thread did not finish a round");
+                // A stalled round is a failed pair, not a failed matrix: this
+                // cell becomes N/A and the remaining pairs still run.
+                gate.abort.store(true, std::memory_order_release);
+                gate.round_go.store(config1.rounds, std::memory_order_release);
+                gate.cv.notify_all();
+                thread1.join();
+                thread2.join();
+                return failed_pair();
             }
             const std::uint64_t end =
                 gate.round_end[0] > gate.round_end[1] ? gate.round_end[0]
                                                       : gate.round_end[1];
             if (end <= start) {
-                throw std::runtime_error("monotonic clock did not advance");
+                gate.abort.store(true, std::memory_order_release);
+                gate.round_go.store(config1.rounds, std::memory_order_release);
+                gate.cv.notify_all();
+                thread1.join();
+                thread2.join();
+                return failed_pair();
             }
+
+            const std::uint64_t elapsed_ms = (end - start) / 1000000ULL;
+            round_timeout = std::chrono::milliseconds(
+                std::max<std::uint64_t>(kMinimumRoundTimeoutMs,
+                                        elapsed_ms * 4 + 2000));
 
             // Each thread performs 'iterations' successful lock operations, so
             // the average latency per locked operation is total time /
@@ -984,14 +1035,14 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             }
         }
     } catch (...) {
-        // Release any worker still waiting for a round, then join them before
-        // propagating the error.
+        // Release any worker still waiting for a round, then join them.  An
+        // unexpected failure ends this pair only.
         gate.abort.store(true, std::memory_order_release);
         gate.round_go.store(config1.rounds, std::memory_order_release);
         gate.cv.notify_all();
         thread1.join();
         thread2.join();
-        throw;
+        return failed_pair();
     }
 
     thread1.join();
@@ -1053,9 +1104,16 @@ MatrixResult run_matrix(const Options& options, int n) {
             if (i == j) {
                 continue;
             }
-            const PairOutcome outcome =
+            PairOutcome outcome =
                 run_pair(i, j, options.iterations, options.runs, owned_mode,
                          options.use_affinity);
+            // One retry: the usual failure is a transient placement loss on a
+            // busy device, and a second attempt keeps the cell numeric instead
+            // of turning it into N/A.
+            if (outcome.failed) {
+                outcome = run_pair(i, j, options.iterations, options.runs,
+                                   owned_mode, options.use_affinity);
+            }
             result.filtered[matrix_index(n, i, j)] = outcome.latency_ns;
             if (!outcome.affinity_ok) {
                 ++unpinned_pairs;
