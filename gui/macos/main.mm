@@ -34,6 +34,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,6 +61,10 @@ static const char* const kArchName = "unknown";
 // Fixed measurement parameters shared with the Windows GUI (GUI_SPEC.md 5).
 static const unsigned long long kIterations = 1000000ULL;
 static const unsigned long long kRuns = 3ULL;
+
+// Minimum interval between two UI progress deliveries (50 ms at most 20 Hz);
+// the final result is always delivered by handleRunFinishedWithCode:.
+static const double kProgressInterval = 0.05;
 
 // ---------------------------------------------------------------------------
 // Geometry (GUI_SPEC.md v3 section 1; all values in pt)
@@ -145,6 +151,21 @@ static NSColor* CLAccentColour(void) {
 
 static NSColor* CLDangerColour(void) { return [NSColor systemRedColor]; }
 
+// Accessibility "Increase contrast" (10.10+).  The selector probe keeps the
+// 10.13 deployment target free of availability thunks; the state is read per
+// paint, which is cheap and always current.
+static BOOL CLIncreaseContrast(void) {
+    NSWorkspace* workspace = [NSWorkspace sharedWorkspace];
+    const SEL selector =
+        NSSelectorFromString(@"accessibilityDisplayShouldIncreaseContrast");
+    if (workspace == nil || ![workspace respondsToSelector:selector]) {
+        return NO;
+    }
+    typedef BOOL (*CLBoolGetter)(id, SEL);
+    CLBoolGetter getter = (CLBoolGetter)(void*)objc_msgSend;
+    return getter(workspace, selector) ? YES : NO;
+}
+
 // SF Symbols are macOS 11+; a direct call would trip -Wunguarded-availability and
 // emit an __isPlatformVersionAtLeast thunk the osxcross libSystem stub does not
 // export, so the class method is reached through respondsToSelector: (same
@@ -185,26 +206,81 @@ static void CLSetButtonSymbol(NSButton* button, NSString* symbolName) {
 // Fonts (GUI_SPEC.md v3 section 3: system fonts only, digits monospaced)
 // ---------------------------------------------------------------------------
 
+enum CLFontKind {
+    CLFontKindRegular = 0,
+    CLFontKindSemibold,
+    CLFontKindBold,
+    CLFontKindDigit,
+    CLFontKindDigitBold
+};
+
+// NSFont creation is expensive and the matrix used to allocate a fresh font for
+// every cell of every repaint.  Fonts are immutable, so they are cached per
+// (kind, size).  Sizes are rounded to 0.01 pt for the key; every size in this
+// file is a multiple of 0.25 pt.  Purged when the layout font size or the
+// effective appearance changes.
+static std::map<long long, NSFont*>* gCLFontCache = nullptr;
+
+static std::map<long long, NSFont*>* CLFontCache(void) {
+    if (gCLFontCache == nullptr) {
+        gCLFontCache = new std::map<long long, NSFont*>();
+    }
+    return gCLFontCache;
+}
+
+static NSFont* CLCachedFont(CLFontKind kind, CGFloat size) {
+    const long long key =
+        static_cast<long long>(kind) * 1000000LL +
+        static_cast<long long>(std::llround(static_cast<double>(size) * 100.0));
+    std::map<long long, NSFont*>* cache = CLFontCache();
+    const std::map<long long, NSFont*>::iterator found = cache->find(key);
+    if (found != cache->end()) {
+        return found->second;
+    }
+    NSFont* font = nil;
+    switch (kind) {
+        case CLFontKindRegular:
+            font = [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
+            break;
+        case CLFontKindSemibold:
+            font = [NSFont systemFontOfSize:size weight:NSFontWeightSemibold];
+            break;
+        case CLFontKindBold:
+            font = [NSFont systemFontOfSize:size weight:NSFontWeightBold];
+            break;
+        case CLFontKindDigit:
+            font = [NSFont monospacedDigitSystemFontOfSize:size
+                                                    weight:NSFontWeightRegular];
+            break;
+        case CLFontKindDigitBold:
+            font = [NSFont monospacedDigitSystemFontOfSize:size
+                                                    weight:NSFontWeightBold];
+            break;
+    }
+    if (font != nil) {
+        cache->emplace(key, font);
+    }
+    return font;
+}
+
 static NSFont* CLUIFont(CGFloat size) {
-    return [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
+    return CLCachedFont(CLFontKindRegular, size);
 }
 
 static NSFont* CLUISemiboldFont(CGFloat size) {
-    return [NSFont systemFontOfSize:size weight:NSFontWeightSemibold];
+    return CLCachedFont(CLFontKindSemibold, size);
 }
 
 static NSFont* CLUIBoldFont(CGFloat size) {
-    return [NSFont systemFontOfSize:size weight:NSFontWeightBold];
+    return CLCachedFont(CLFontKindBold, size);
 }
 
 static NSFont* CLDigitFont(CGFloat size) {
-    return [NSFont monospacedDigitSystemFontOfSize:size
-                                            weight:NSFontWeightRegular];
+    return CLCachedFont(CLFontKindDigit, size);
 }
 
 static NSFont* CLDigitBoldFont(CGFloat size) {
-    return [NSFont monospacedDigitSystemFontOfSize:size
-                                            weight:NSFontWeightBold];
+    return CLCachedFont(CLFontKindDigitBold, size);
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +309,53 @@ static NSRect CLRect(const cl_layout::Rect& rect) {
                       static_cast<CGFloat>(rect.height));
 }
 
-static void CLDrawString(NSString* text, NSRect rect, NSFont* font,
-                         NSColor* colour, NSTextAlignment alignment) {
-    if (text == nil || text.length == 0 || font == nil) {
-        return;
+struct CLTextAttributesKey {
+    const void* font;
+    const void* colour;
+    long alignment;
+
+    bool operator<(const CLTextAttributesKey& other) const {
+        if (font != other.font) {
+            return font < other.font;
+        }
+        if (colour != other.colour) {
+            return colour < other.colour;
+        }
+        return alignment < other.alignment;
+    }
+};
+
+// Drawing attributes (paragraph style + font/colour dictionary) were allocated
+// for every string drawn.  Cache them by font/colour/alignment identity.
+static std::map<CLTextAttributesKey, NSDictionary*>* gCLTextAttributesCache =
+    nullptr;
+
+static std::map<CLTextAttributesKey, NSDictionary*>* CLTextAttributesCache(void) {
+    if (gCLTextAttributesCache == nullptr) {
+        gCLTextAttributesCache =
+            new std::map<CLTextAttributesKey, NSDictionary*>();
+    }
+    return gCLTextAttributesCache;
+}
+
+static NSDictionary* CLTextAttributes(NSFont* font, NSColor* colour,
+                                      NSTextAlignment alignment) {
+    if (font == nil) {
+        return nil;
+    }
+    CLTextAttributesKey key;
+    key.font = (__bridge const void*)font;
+    key.colour = (__bridge const void*)colour;
+    key.alignment = static_cast<long>(alignment);
+    std::map<CLTextAttributesKey, NSDictionary*>* cache =
+        CLTextAttributesCache();
+    const std::map<CLTextAttributesKey, NSDictionary*>::iterator found =
+        cache->find(key);
+    if (found != cache->end()) {
+        return found->second;
+    }
+    if (cache->size() > 512) {
+        cache->clear();   // bounded: never let appearance churn grow forever
     }
     NSMutableParagraphStyle* style = [[NSMutableParagraphStyle alloc] init];
     style.alignment = alignment;
@@ -246,7 +365,38 @@ static void CLDrawString(NSString* text, NSRect rect, NSFont* font,
         NSForegroundColorAttributeName : colour,
         NSParagraphStyleAttributeName : style
     };
-    [text drawInRect:rect withAttributes:attributes];
+    cache->emplace(key, attributes);
+    return attributes;
+}
+
+// Call after an appearance / font-size change: old NSFont instances must not be
+// reused, and cached attribute dictionaries retain their fonts.
+static void CLPurgeDrawingCaches(void) {
+    if (gCLFontCache != nullptr) {
+        gCLFontCache->clear();
+    }
+    if (gCLTextAttributesCache != nullptr) {
+        gCLTextAttributesCache->clear();
+    }
+}
+
+static void CLDrawString(NSString* text, NSRect rect, NSFont* font,
+                         NSColor* colour, NSTextAlignment alignment) {
+    if (text == nil || text.length == 0 || font == nil) {
+        return;
+    }
+    [text drawInRect:rect withAttributes:CLTextAttributes(font, colour, alignment)];
+}
+
+// Fills one rounded matrix cell using the shared CGPath and a translated CTM.
+static void CLFillCell(CGContextRef context, CGPathRef path, CGFloat x, CGFloat y,
+                       NSColor* colour) {
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, x, y);
+    CGContextAddPath(context, path);
+    [colour setFill];
+    CGContextFillPath(context);
+    CGContextRestoreGState(context);
 }
 
 // Draws one line vertically centred inside rect.
@@ -339,6 +489,14 @@ enum CLStatusKind {
     CLStatusFailed
 };
 
+struct CLStats {
+    bool valid = false;
+    float minimum = 0.0f;
+    float maximum = 0.0f;
+    double average = 0.0;
+    int count = 0;
+};
+
 struct CLModel {
     int logical = 2;
     int physical = 0;
@@ -366,14 +524,12 @@ struct CLModel {
     int lastJ = -1;
     float lastLatency = std::numeric_limits<float>::quiet_NaN();
     double elapsed = 0.0;
-};
 
-struct CLStats {
-    bool valid = false;
-    float minimum = 0.0f;
-    float maximum = 0.0f;
-    double average = 0.0;
-    int count = 0;
+    // Aggregate statistics are O(n*n); recompute only when a cell changed.
+    CLStats cachedStats;
+    int statsRevision = 0;
+    int statsCachedRevision = -1;
+    bool statsCacheValid = false;
 };
 
 static CLStats CLComputeStats(const CLModel& model) {
@@ -416,6 +572,15 @@ static CLStats CLComputeStats(const CLModel& model) {
     return stats;
 }
 
+static const CLStats& CLCachedStats(CLModel& model) {
+    if (!model.statsCacheValid || model.statsCachedRevision != model.statsRevision) {
+        model.cachedStats = CLComputeStats(model);
+        model.statsCachedRevision = model.statsRevision;
+        model.statsCacheValid = true;
+    }
+    return model.cachedStats;
+}
+
 static std::string CLToString(NSString* text) {
     if (text == nil) {
         return std::string();
@@ -442,6 +607,8 @@ static void CLResetCells(CLModel* model, int n) {
     model->total = n * (n - 1);
     model->lastI = -1;
     model->lastJ = -1;
+    ++model->statsRevision;
+    model->statsCacheValid = false;
 }
 
 // "T0…T7" for the measurement-target sentence (GUI_SPEC.md section 0).
@@ -480,8 +647,21 @@ static CGFloat CLMatrixLabelWidth(int n) {
 
 // Largest digit size that keeps a "113.5" style value inside the cell.
 static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
-    CGFloat size = base;
     const CGFloat usable = std::max<CGFloat>(cellWidth - 6.0, 8.0);
+    if (text == nil || text.length == 0 || base <= 6.0) {
+        return std::max<CGFloat>(base, 6.0);
+    }
+    // The old loop stepped 0.25 pt at a time from base down to 6 and measured
+    // every step.  Digit widths scale linearly with point size, so one measured
+    // estimate plus a few corrections is equivalent and much cheaper.
+    const CGFloat baseWidth = CLTextWidth(text, CLDigitBoldFont(base));
+    if (baseWidth <= usable) {
+        return base;
+    }
+    CGFloat size = std::floor(base * usable / baseWidth * 4.0) / 4.0;
+    if (size < 6.0) {
+        size = 6.0;
+    }
     while (size > 6.0 && CLTextWidth(text, CLDigitBoldFont(size)) > usable) {
         size -= 0.25;
     }
@@ -497,7 +677,10 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 @interface CLCardView : NSView
 @end
 
-@implementation CLCardView
+@implementation CLCardView {
+    NSBezierPath* _cachedPath;
+    NSRect _cachedRect;
+}
 
 - (BOOL)isFlipped {
     return YES;
@@ -507,18 +690,37 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     return NO;
 }
 
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    _cachedPath = nil;
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     const NSRect rect = NSInsetRect(self.bounds, kCardBorderWidth / 2.0,
                                     kCardBorderWidth / 2.0);
-    NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:rect
-                                                         xRadius:kCardRadius
-                                                         yRadius:kCardRadius];
+    if (_cachedPath == nil || !NSEqualRects(rect, _cachedRect)) {
+        _cachedRect = rect;
+        _cachedPath = [NSBezierPath bezierPathWithRoundedRect:rect
+                                                      xRadius:kCardRadius
+                                                      yRadius:kCardRadius];
+    }
     [CLCardFillColour() setFill];
-    [path fill];
-    [CLCardBorderColour() setStroke];
-    [path setLineWidth:kCardBorderWidth];
-    [path stroke];
+    [_cachedPath fill];
+    if (CLIncreaseContrast()) {
+        [CLLabelColour() setStroke];   // stronger card outline in high contrast
+    } else {
+        [CLCardBorderColour() setStroke];
+    }
+    [_cachedPath setLineWidth:kCardBorderWidth];
+    [_cachedPath stroke];
+}
+
+// 10.14+; on 10.13 AppKit never sends it, so the override is inert there.
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    _cachedPath = nil;
+    [self setNeedsDisplay:YES];
 }
 
 @end
@@ -535,7 +737,13 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 @property(nonatomic, assign) cl_layout::Layout layout;
 @end
 
-@implementation CLMatrixView
+@implementation CLMatrixView {
+    CGPathRef _cellPath;
+    CGFloat _cellPathWidth;
+    CGFloat _cellPathHeight;
+    CGFloat _cellPathRadius;
+    NSMutableDictionary<NSNumber*, NSString*>* _valueTextCache;
+}
 
 - (BOOL)isFlipped {
     return YES;
@@ -543,6 +751,37 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 - (BOOL)isOpaque {
     return NO;
+}
+
+- (void)dealloc {
+    if (_cellPath != nullptr) {
+        CGPathRelease(_cellPath);
+    }
+}
+
+// One rounded-rect path is shared by every cell: all cells have the same size,
+// so the path is built at the origin and translated with the CGContext.
+- (CGPathRef)cellPathForWidth:(CGFloat)width
+                       height:(CGFloat)height
+                       radius:(CGFloat)radius {
+    if (_cellPath == nullptr || _cellPathWidth != width ||
+        _cellPathHeight != height || _cellPathRadius != radius) {
+        if (_cellPath != nullptr) {
+            CGPathRelease(_cellPath);
+        }
+        _cellPath = CGPathCreateWithRoundedRect(
+            CGRectMake(0.0, 0.0, width, height), radius, radius, nullptr);
+        _cellPathWidth = width;
+        _cellPathHeight = height;
+        _cellPathRadius = radius;
+    }
+    return _cellPath;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    _cellPath = nullptr;   // rebuilt lazily by the next draw
+    [self setNeedsDisplay:YES];
 }
 
 - (NSRect)rectForRow:(int)row column:(int)column {
@@ -570,7 +809,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     }
     const cl_layout::Layout layout = self.layout;
     const int n = model->n;
-    const CLStats stats = CLComputeStats(*model);
+    const CLStats& stats = CLCachedStats(*model);
 
     const CGFloat gap = static_cast<CGFloat>(layout.cellGap);
     const CGFloat cellW = static_cast<CGFloat>(layout.cellWidth);
@@ -583,6 +822,9 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     // Cells are small in overview mode, so the corner radius shrinks with them.
     const CGFloat radius = (cellH >= 10.0) ? kCellRadius
                                            : std::max<CGFloat>(1.0, cellH * 0.25);
+    const CGPathRef cellPath = [self cellPathForWidth:cellW height:cellH
+                                               radius:radius];
+    CGContextRef context = [NSGraphicsContext currentContext].CGContext;
 
     // The column headers live in CLMatrixHeaderView (a fixed row above the
     // scroll view); this view draws the grid only, so nothing here can ever
@@ -604,13 +846,13 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
         for (int column = 0; column < n; ++column) {
             const CGFloat x = static_cast<CGFloat>(cl_layout::ColumnX(layout, column));
             const NSRect cell = NSMakeRect(x, y, cellW, cellH);
-            NSBezierPath* path =
-                [NSBezierPath bezierPathWithRoundedRect:cell
-                                                xRadius:radius
-                                                yRadius:radius];
+            // Only repaint the cells that intersect the dirty rect; a finished
+            // pair invalidates exactly one cell (refreshPairRow).
+            if (!NSIsEmptyRect(dirtyRect) && !NSIntersectsRect(cell, dirtyRect)) {
+                continue;
+            }
             if (row == column) {
-                [CLQuaternaryColour() setFill];
-                [path fill];
+                CLFillCell(context, cellPath, x, y, CLQuaternaryColour());
                 if (showValues) {
                     CLDrawStringCentred(@"x", cell, CLUIFont(baseFont),
                                         CLTertiaryColour());
@@ -623,8 +865,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
                 (index < model->cells.size()) ? model->cells[index]
                                               : std::numeric_limits<float>::quiet_NaN();
             if (std::isnan(value) || value <= 0.0f) {
-                [CLQuaternaryColour() setFill];
-                [path fill];
+                CLFillCell(context, cellPath, x, y, CLQuaternaryColour());
                 if (showValues) {
                     CLDrawStringCentred(@"·", cell, CLUIFont(baseFont),
                                         CLTertiaryColour());
@@ -633,8 +874,8 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
             }
             const float minimum = stats.valid ? stats.minimum : value;
             const float maximum = stats.valid ? stats.maximum : value;
-            [CLHeatColour(value, minimum, maximum) setFill];
-            [path fill];
+            CLFillCell(context, cellPath, x, y,
+                       CLHeatColour(value, minimum, maximum));
 
             if (!showValues) {
                 continue;
@@ -669,6 +910,11 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 - (BOOL)isFlipped {
     return YES;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    [self setNeedsDisplay:YES];
 }
 
 - (BOOL)isOpaque {
@@ -718,6 +964,11 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 - (BOOL)isFlipped {
     return YES;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    [self setNeedsDisplay:YES];
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
@@ -812,6 +1063,11 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
         _model.arch = kArchName;
         _inLayout = NO;
         [self buildSubviews];
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(accessibilityDisplayOptionsDidChange:)
+                   name:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
+                 object:nil];
     }
     return self;
 }
@@ -1110,6 +1366,8 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
         return;
     }
     _inLayout = YES;
+    // Geometry/font-size change: drop cached fonts and attribute dictionaries.
+    CLPurgeDrawingCaches();
 
     const NSRect bounds = self.bounds;
     cl_layout::Metrics metrics;
@@ -1247,6 +1505,25 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     [self syncLayout];
 }
 
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    CLPurgeDrawingCaches();
+    [self setNeedsDisplay:YES];
+    [_matrixCard setNeedsDisplay:YES];
+    [_matrixView setNeedsDisplay:YES];
+    [_matrixHeaderView setNeedsDisplay:YES];
+    [_legendView setNeedsDisplay:YES];
+}
+
+- (void)accessibilityDisplayOptionsDidChange:(NSNotification*)notification {
+    (void)notification;
+    [self setNeedsDisplay:YES];
+    [_matrixCard setNeedsDisplay:YES];
+    [_matrixView setNeedsDisplay:YES];
+    [_matrixHeaderView setNeedsDisplay:YES];
+    [_legendView setNeedsDisplay:YES];
+}
+
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
     [self syncLayout];
@@ -1327,7 +1604,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 }
 
 - (NSString*)statsText {
-    const CLStats stats = CLComputeStats(_model);
+    const CLStats& stats = CLCachedStats(_model);
     if (!stats.valid) {
         return @"平均 -- · 最小 -- · 最大 -- ns";
     }
@@ -1397,6 +1674,8 @@ static void CLInstallMainMenu(CLAppDelegate* delegate);
 @interface CLAppDelegate ()
 - (CLModel*)model;
 - (void)handleProgress:(ClProgress)progress;
+- (void)enqueueProgress:(ClProgress)progress;
+- (void)drainProgress;
 - (void)handleRunFinishedWithCode:(int)code
                            result:(ClResult)result
                           message:(NSString*)message;
@@ -1417,6 +1696,14 @@ static void CLInstallMainMenu(CLAppDelegate* delegate);
     std::thread _worker;
     ClResult _lastResult;
     BOOL _closing;
+
+    // Progress coalescing: the engine signals every finished pair, but the
+    // window is repainted at most once per kProgressInterval.
+    std::mutex _progressMutex;
+    ClProgress _pendingProgress;
+    BOOL _hasPendingProgress;
+    BOOL _progressScheduled;
+    double _lastProgressDispatch;
 }
 
 - (instancetype)init {
@@ -1424,6 +1711,9 @@ static void CLInstallMainMenu(CLAppDelegate* delegate);
     if (self != nil) {
         std::memset(&_lastResult, 0, sizeof(_lastResult));
         _closing = NO;
+        _hasPendingProgress = NO;
+        _progressScheduled = NO;
+        _lastProgressDispatch = 0.0;
         _abort = cl_abort_create();
     }
     return self;
@@ -1740,9 +2030,61 @@ static void CLProgressThunk(void* context, const ClProgress* progress) {
     }
     CLAppDelegate* delegate = (__bridge CLAppDelegate*)context;
     const ClProgress snapshot = *progress;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [delegate handleProgress:snapshot];
-    });
+    [delegate enqueueProgress:snapshot];
+}
+
+// Main queue: deliver the newest coalesced snapshot.
+- (void)drainProgress {
+    ClProgress progress;
+    BOOL has = NO;
+    {
+        std::lock_guard<std::mutex> lock(_progressMutex);
+        _progressScheduled = NO;
+        if (_hasPendingProgress) {
+            progress = _pendingProgress;
+            _hasPendingProgress = NO;
+            has = YES;
+            _lastProgressDispatch = CFAbsoluteTimeGetCurrent();
+        }
+    }
+    if (has) {
+        [self handleProgress:progress];
+    }
+}
+
+// Worker thread: keep only the latest snapshot; at most one main-queue block
+// is in flight, and consecutive deliveries are at least kProgressInterval
+// apart.  The final state is always delivered by handleRunFinished.
+- (void)enqueueProgress:(ClProgress)progress {
+    BOOL schedule = NO;
+    double delay = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(_progressMutex);
+        _pendingProgress = progress;
+        _hasPendingProgress = YES;
+        if (!_progressScheduled) {
+            _progressScheduled = YES;
+            const double now = CFAbsoluteTimeGetCurrent();
+            const double earliest = _lastProgressDispatch + kProgressInterval;
+            delay = (earliest > now) ? (earliest - now) : 0.0;
+            schedule = YES;
+        }
+    }
+    if (!schedule) {
+        return;
+    }
+    CLAppDelegate* strongSelf = self;
+    if (delay > 0.0) {
+        const int64_t when = static_cast<int64_t>(delay * 1e9);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, when),
+                       dispatch_get_main_queue(), ^{
+                           [strongSelf drainProgress];
+                       });
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [strongSelf drainProgress];
+        });
+    }
 }
 
 - (void)handleProgress:(ClProgress)progress {
@@ -1757,6 +2099,7 @@ static void CLProgressThunk(void* context, const ClProgress* progress) {
         progress.j < model->n) {
         model->cells[static_cast<std::size_t>(progress.i) * model->n +
                      static_cast<std::size_t>(progress.j)] = progress.latency_ns;
+        ++model->statsRevision;
     }
     model->done = progress.done;
     model->total = progress.total;
@@ -1798,6 +2141,8 @@ static void CLProgressThunk(void* context, const ClProgress* progress) {
         const std::size_t count = static_cast<std::size_t>(result.n) *
                                   static_cast<std::size_t>(result.n);
         model->cells.assign(result.cells, result.cells + count);
+        ++model->statsRevision;
+        model->statsCacheValid = false;
     }
     model->done = result.pairs_done;
     model->total = result.pairs_total;

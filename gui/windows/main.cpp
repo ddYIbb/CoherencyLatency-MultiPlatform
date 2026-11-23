@@ -28,6 +28,7 @@
 #include <cstring>
 #include <cwchar>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -542,19 +543,24 @@ float LineHeight(HFONT font) {
     return static_cast<float>(metrics.tmHeight);
 }
 
-void DrawTextGdi(HDC dc, const std::wstring& text, HFONT font, ARGB color,
+void DrawTextGdi(HDC dc, const wchar_t* text, HFONT font, ARGB color,
                  const RECT& rect, UINT format) {
-    if (dc == nullptr || font == nullptr || text.empty()) {
+    if (dc == nullptr || font == nullptr || text == nullptr || text[0] == L'\0') {
         return;
     }
     HGDIOBJ old = SelectObject(dc, font);
     const int oldMode = SetBkMode(dc, TRANSPARENT);
     const COLORREF oldColor = SetTextColor(dc, ToColorRef(color));
     RECT target = rect;
-    DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &target, format);
+    DrawTextW(dc, text, static_cast<int>(wcslen(text)), &target, format);
     SetTextColor(dc, oldColor);
     SetBkMode(dc, oldMode);
     SelectObject(dc, old);
+}
+
+void DrawTextGdi(HDC dc, const std::wstring& text, HFONT font, ARGB color,
+                 const RECT& rect, UINT format) {
+    DrawTextGdi(dc, text.c_str(), font, color, rect, format);
 }
 
 void DrawTextLeft(HDC dc, const std::wstring& text, HFONT font, ARGB color,
@@ -581,13 +587,18 @@ void DrawTextRight(HDC dc, const std::wstring& text, HFONT font, ARGB color,
     DrawTextGdi(dc, text, font, color, r, flags);
 }
 
-void DrawTextCenter(HDC dc, const std::wstring& text, HFONT font, ARGB color,
+void DrawTextCenter(HDC dc, const wchar_t* text, HFONT font, ARGB color,
                     float x, float y, float w, float h) {
     RECT r = {static_cast<LONG>(std::lround(x)), static_cast<LONG>(std::lround(y)),
               static_cast<LONG>(std::lround(x + w)),
               static_cast<LONG>(std::lround(y + h))};
     DrawTextGdi(dc, text, font, color, r,
                 DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+}
+
+void DrawTextCenter(HDC dc, const std::wstring& text, HFONT font, ARGB color,
+                    float x, float y, float w, float h) {
+    DrawTextCenter(dc, text.c_str(), font, color, x, y, w, h);
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,10 +1060,23 @@ Stats ComputeStats() {
     return stats;
 }
 
-bool HasData() { return ComputeStats().valid; }
+Stats g_statsCache;
+bool g_statsCacheValid = false;
+
+const Stats& CachedStats() {
+    if (!g_statsCacheValid) {
+        g_statsCache = ComputeStats();
+        g_statsCacheValid = true;
+    }
+    return g_statsCache;
+}
+
+void InvalidateStatsCache() { g_statsCacheValid = false; }
+
+bool HasData() { return CachedStats().valid; }
 
 std::wstring BuildStatsText() {
-    const Stats stats = ComputeStats();
+    const Stats& stats = CachedStats();
     if (!stats.valid) {
         return L"平均 – · 最小 – · 最大 – ns";
     }
@@ -1558,38 +1582,129 @@ RectF ToRectF(const RECT& r) {
                  static_cast<REAL>(r.bottom - r.top));
 }
 
-void FillRoundRect(Graphics& g, const RECT& r, float radius, ARGB color) {
-    const RectF rect = ToRectF(r);
-    GraphicsPath path;
-    const float d = radius * 2.0f;
-    if (radius <= 0.5f || rect.Width <= d || rect.Height <= d) {
-        path.AddRectangle(rect);
-    } else {
-        path.AddArc(rect.X, rect.Y, d, d, 180.0f, 90.0f);
-        path.AddArc(rect.X + rect.Width - d, rect.Y, d, d, 270.0f, 90.0f);
-        path.AddArc(rect.X + rect.Width - d, rect.Y + rect.Height - d, d, d, 0.0f, 90.0f);
-        path.AddArc(rect.X, rect.Y + rect.Height - d, d, d, 90.0f, 90.0f);
-        path.CloseFigure();
+// ---------------------------------------------------------------------------
+// GDI+ object cache.  The heat matrix used to create one GraphicsPath and one
+// SolidBrush per cell (32x32 = 1024 cells -> 2000+ GDI+ objects every frame).
+// Rounded-rectangle paths are cached per pixel size / radius, brushes and pens
+// per colour; theme or DPI changes flush the cache.
+// ---------------------------------------------------------------------------
+struct GdiplusCache {
+    std::map<ARGB, SolidBrush*> brushes;
+    std::map<std::pair<ARGB, int>, Pen*> pens;
+    std::map<unsigned long long, GraphicsPath*> paths;
+
+    SolidBrush* Brush(ARGB color) {
+        auto it = brushes.find(color);
+        if (it != brushes.end()) {
+            return it->second;
+        }
+        SolidBrush* brush = new SolidBrush(Color(color));
+        brushes.emplace(color, brush);
+        return brush;
     }
-    SolidBrush brush((Color(color)));
-    g.FillPath(&brush, &path);
+
+    Pen* Stroke(ARGB color, float width) {
+        const int widthQ = std::max(1, static_cast<int>(std::lround(width * 16.0f)));
+        const auto key = std::make_pair(color, widthQ);
+        auto it = pens.find(key);
+        if (it != pens.end()) {
+            return it->second;
+        }
+        Pen* pen = new Pen(Color(color), static_cast<REAL>(widthQ) / 16.0f);
+        pens.emplace(key, pen);
+        return pen;
+    }
+
+    GraphicsPath* RoundPath(int w, int h, float radius) {
+        if (w <= 0 || h <= 0) {
+            return nullptr;
+        }
+        const int radiusQ = std::max(0, static_cast<int>(std::lround(radius * 16.0f)));
+        const unsigned long long key =
+            (static_cast<unsigned long long>(w) << 40) |
+            (static_cast<unsigned long long>(h) << 20) |
+            static_cast<unsigned long long>(radiusQ & 0xFFFFF);
+        auto it = paths.find(key);
+        if (it != paths.end()) {
+            return it->second;
+        }
+        if (paths.size() > 128) {
+            // Progress-bar widths change on every tick; keep the cache bounded.
+            ClearPaths();
+        }
+        auto* path = new GraphicsPath();
+        const float d = static_cast<float>(radiusQ) / 16.0f * 2.0f;
+        const RectF rect(0.0f, 0.0f, static_cast<REAL>(w), static_cast<REAL>(h));
+        if (radiusQ <= 8 || rect.Width <= d || rect.Height <= d) {
+            path->AddRectangle(rect);
+        } else {
+            path->AddArc(rect.X, rect.Y, d, d, 180.0f, 90.0f);
+            path->AddArc(rect.X + rect.Width - d, rect.Y, d, d, 270.0f, 90.0f);
+            path->AddArc(rect.X + rect.Width - d, rect.Y + rect.Height - d, d, d, 0.0f,
+                         90.0f);
+            path->AddArc(rect.X, rect.Y + rect.Height - d, d, d, 90.0f, 90.0f);
+            path->CloseFigure();
+        }
+        paths.emplace(key, path);
+        return path;
+    }
+
+    void ClearPaths() {
+        for (auto& entry : paths) {
+            delete entry.second;
+        }
+        paths.clear();
+    }
+
+    void Release() {
+        for (auto& entry : brushes) {
+            delete entry.second;
+        }
+        brushes.clear();
+        for (auto& entry : pens) {
+            delete entry.second;
+        }
+        pens.clear();
+        ClearPaths();
+    }
+};
+
+GdiplusCache g_gpCache;
+
+bool RectOverlaps(const RECT& a, const RECT& b) {
+    return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+void FillRoundRect(Graphics& g, const RECT& r, float radius, ARGB color) {
+    const int w = r.right - r.left;
+    const int h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const GraphicsPath* path = g_gpCache.RoundPath(w, h, radius);
+    if (path == nullptr) {
+        return;
+    }
+    const GraphicsState state = g.Save();
+    g.TranslateTransform(static_cast<REAL>(r.left), static_cast<REAL>(r.top));
+    g.FillPath(g_gpCache.Brush(color), path);
+    g.Restore(state);
 }
 
 void StrokeRoundRect(Graphics& g, const RECT& r, float radius, ARGB color, float width) {
-    const RectF rect = ToRectF(r);
-    GraphicsPath path;
-    const float d = radius * 2.0f;
-    if (radius <= 0.5f || rect.Width <= d || rect.Height <= d) {
-        path.AddRectangle(rect);
-    } else {
-        path.AddArc(rect.X, rect.Y, d, d, 180.0f, 90.0f);
-        path.AddArc(rect.X + rect.Width - d, rect.Y, d, d, 270.0f, 90.0f);
-        path.AddArc(rect.X + rect.Width - d, rect.Y + rect.Height - d, d, d, 0.0f, 90.0f);
-        path.AddArc(rect.X, rect.Y + rect.Height - d, d, d, 90.0f, 90.0f);
-        path.CloseFigure();
+    const int w = r.right - r.left;
+    const int h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) {
+        return;
     }
-    Pen pen((Color(color)), width);
-    g.DrawPath(&pen, &path);
+    const GraphicsPath* path = g_gpCache.RoundPath(w, h, radius);
+    if (path == nullptr) {
+        return;
+    }
+    const GraphicsState state = g.Save();
+    g.TranslateTransform(static_cast<REAL>(r.left), static_cast<REAL>(r.top));
+    g.DrawPath(g_gpCache.Stroke(color, width), path);
+    g.Restore(state);
 }
 
 // The legend is sampled from the very same heat function the cells use, so the
@@ -1609,13 +1724,15 @@ void DrawLegendGradient(Graphics& g, const RECT& r) {
         clip.AddRectangle(rect);
     }
     g.SetClip(&clip);
-    const int strips = std::max(8, static_cast<int>(std::lround(rect.Width)));
+    // Spec 4: fixed 64 samples of the heat curve, t = (k + 0.5) / 64 with
+    // both endpoints excluded -- identical to the macOS legend.
+    const int strips = 64;
     for (int k = 0; k < strips; ++k) {
-        const float t = static_cast<float>(k) / static_cast<float>(strips - 1);
-        SolidBrush brush((Color(HeatColor(t, 0.0f, 1.0f))));
+        const float t = (static_cast<float>(k) + 0.5f) / static_cast<float>(strips);
         const float x0 = rect.X + rect.Width * static_cast<float>(k) / static_cast<float>(strips);
         const float x1 = rect.X + rect.Width * static_cast<float>(k + 1) / static_cast<float>(strips);
-        g.FillRectangle(&brush, RectF(x0, rect.Y, (x1 - x0) + 1.0f, rect.Height));
+        g.FillRectangle(g_gpCache.Brush(HeatColor(t, 0.0f, 1.0f)),
+                        RectF(x0, rect.Y, (x1 - x0) + 1.0f, rect.Height));
     }
     g.ResetClip();
 }
@@ -2092,10 +2209,16 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     if (w <= 0 || h <= 0) {
         return;
     }
+    const bool bufferRecreated = g_matrixBack.dc == nullptr ||
+                                 g_matrixBack.width != w || g_matrixBack.height != h;
     g_matrixBack.Ensure(hdc, w, h);
     HDC mem = g_matrixBack.dc;
     if (mem == nullptr) {
         return;
+    }
+    RECT target = dirty;
+    if (bufferRecreated || target.right <= target.left || target.bottom <= target.top) {
+        target = client;
     }
 
     const UiLayout& L = g_app.layout;
@@ -2109,47 +2232,61 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     const float gridY = gm.headerH + gm.offsetY - scrollY;
 
     {
-        // Background first: one solid fill, no themed brush, no erase.
+        // Background first: only the damaged rectangle.  The back buffer keeps
+        // the rest of the previous frame, so a per-cell invalidation repaints
+        // one cell instead of the whole 32x32 grid.
         Graphics g(mem);
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(PixelOffsetModeHalf);
-        SolidBrush bg((Color(g_palette.cardBg)));
-        g.FillRectangle(&bg, 0, 0, w, h);
+        g.FillRectangle(g_gpCache.Brush(g_palette.cardBg),
+                        static_cast<REAL>(target.left), static_cast<REAL>(target.top),
+                        static_cast<REAL>(target.right - target.left),
+                        static_cast<REAL>(target.bottom - target.top));
         FlushGraphics(g);
     }
 
-    const Stats stats = ComputeStats();
+    const Stats& stats = CachedStats();
     const int clipL = static_cast<int>(std::lround(gm.labelW));
     const int clipT = static_cast<int>(std::lround(gm.headerH));
     const int clipR = w - static_cast<int>(std::lround(gm.sbW));
     const int clipB = h - static_cast<int>(std::lround(gm.sbH));
+    const int drawL = std::max(clipL, static_cast<int>(target.left));
+    const int drawT = std::max(clipT, static_cast<int>(target.top));
+    const int drawR = std::min(clipR, static_cast<int>(target.right));
+    const int drawB = std::min(clipB, static_cast<int>(target.bottom));
     const float radius = Pxf(kCellRadius);
 
-    // ---- 色块区（严格裁剪到网格视口，永远不会画到标题行/行标签上） --------
-    if (clipR > clipL && clipB > clipT) {
+    // ---- 色块区（严格裁剪到网格视口和本次脏矩形，永远不会画到标题行/行标签上） --
+    if (drawR > drawL && drawB > drawT) {
         SaveDC(mem);
-        IntersectClipRect(mem, clipL, clipT, clipR, clipB);
+        IntersectClipRect(mem, drawL, drawT, drawR, drawB);
 
         Graphics g(mem);
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(PixelOffsetModeHalf);
-
+        const int cellPx = static_cast<int>(std::lround(cell));
+        GraphicsPath* cellPath = g_gpCache.RoundPath(cellPx, cellPx, radius);
+        SolidBrush cellBrush((Color(g_palette.cellIdleBg)));
+        Matrix cellMatrix;
         for (int i = 0; i < n; ++i) {
             const float y = gridY + static_cast<float>(i) * step;
-            if (y + cell < static_cast<float>(clipT) - 1.0f ||
-                y > static_cast<float>(clipB) + 1.0f) {
+            if (y + cell < static_cast<float>(drawT) - 1.0f ||
+                y > static_cast<float>(drawB) + 1.0f) {
                 continue;
             }
             for (int j = 0; j < n; ++j) {
                 const float x = gridX + static_cast<float>(j) * step;
-                if (x + cell < static_cast<float>(clipL) - 1.0f ||
-                    x > static_cast<float>(clipR) + 1.0f) {
+                if (x + cell < static_cast<float>(drawL) - 1.0f ||
+                    x > static_cast<float>(drawR) + 1.0f) {
                     continue;
                 }
-                const RECT rc = {static_cast<LONG>(std::lround(x)),
-                                 static_cast<LONG>(std::lround(y)),
-                                 static_cast<LONG>(std::lround(x + cell)),
-                                 static_cast<LONG>(std::lround(y + cell))};
+                const int left = static_cast<int>(std::lround(x));
+                const int top = static_cast<int>(std::lround(y));
+                const int rightPx = static_cast<int>(std::lround(x + cell));
+                const int bottomPx = static_cast<int>(std::lround(y + cell));
+                if (rightPx <= left || bottomPx <= top) {
+                    continue;
+                }
                 const float value =
                     g_app.cells.size() == static_cast<size_t>(n) * static_cast<size_t>(n)
                         ? g_app.cells[static_cast<size_t>(i) * n + j]
@@ -2160,9 +2297,17 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
                     fill = HeatColor(value, stats.valid ? stats.minimum : 0.0f,
                                      stats.valid ? stats.maximum : 1.0f);
                 }
-                FillRoundRect(g, rc, radius, fill);
+                if (cellPath != nullptr) {
+                    cellBrush.SetColor(Color(fill));
+                    cellMatrix.SetElements(1.0f, 0.0f, 0.0f, 1.0f,
+                                           static_cast<REAL>(left),
+                                           static_cast<REAL>(top));
+                    g.SetTransform(&cellMatrix);
+                    g.FillPath(&cellBrush, cellPath);
+                }
             }
         }
+        g.ResetTransform();
         FlushGraphics(g);
         RestoreDC(mem, -1);
     }
@@ -2176,37 +2321,41 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
             const RECT track = {static_cast<LONG>(std::lround(static_cast<float>(w) - gm.sbW)),
                                 static_cast<LONG>(std::lround(gm.headerH)), w,
                                 static_cast<LONG>(std::lround(static_cast<float>(h) - gm.sbH))};
-            FillRoundRect(g, track, gm.sbW * 0.5f, WithAlpha(g_palette.scrollThumb, 48));
-            RECT t2 = thumb;
-            t2.right = static_cast<LONG>(std::lround(static_cast<float>(thumb.left) + gm.sbW));
-            FillRoundRect(g, t2, gm.sbW * 0.5f, g_palette.scrollThumb);
+            if (RectOverlaps(target, track)) {
+                FillRoundRect(g, track, gm.sbW * 0.5f, WithAlpha(g_palette.scrollThumb, 48));
+                RECT t2 = thumb;
+                t2.right = static_cast<LONG>(std::lround(static_cast<float>(thumb.left) + gm.sbW));
+                FillRoundRect(g, t2, gm.sbW * 0.5f, g_palette.scrollThumb);
+            }
         }
         if (gm.scrollX) {
             const RECT thumb = HThumbRect(gm, w, h, scrollX, gm.maxScrollX);
             const RECT track = {static_cast<LONG>(std::lround(gm.labelW)),
                                 static_cast<LONG>(std::lround(static_cast<float>(h) - gm.sbH)),
                                 static_cast<LONG>(std::lround(static_cast<float>(w) - gm.sbW)), h};
-            FillRoundRect(g, track, gm.sbH * 0.5f, WithAlpha(g_palette.scrollThumb, 48));
-            RECT t2 = thumb;
-            t2.bottom = static_cast<LONG>(std::lround(static_cast<float>(thumb.top) + gm.sbH));
-            FillRoundRect(g, t2, gm.sbH * 0.5f, g_palette.scrollThumb);
+            if (RectOverlaps(target, track)) {
+                FillRoundRect(g, track, gm.sbH * 0.5f, WithAlpha(g_palette.scrollThumb, 48));
+                RECT t2 = thumb;
+                t2.bottom = static_cast<LONG>(std::lround(static_cast<float>(thumb.top) + gm.sbH));
+                FillRoundRect(g, t2, gm.sbH * 0.5f, g_palette.scrollThumb);
+            }
         }
         FlushGraphics(g);
     }
 
-    BitBlt(hdc, dirty.left, dirty.top, dirty.right - dirty.left,
-           dirty.bottom - dirty.top, mem, dirty.left, dirty.top, SRCCOPY);
+    BitBlt(hdc, target.left, target.top, target.right - target.left,
+           target.bottom - target.top, mem, target.left, target.top, SRCCOPY);
 
     // 文字一律画在窗口 DC 上、且在所有 GDI+ 调用之后：GDI+ 的 FlushGraphics 会
     // 把同一块内存 DC 里的 GDI 文字冲掉，所以标签/数字只能在 BitBlt 之后落到 hdc。
     // ---- 单元格数字（只有格子够大时才有，n <= 8） ------------------------
-    if (gm.showCellText && clipR > clipL && clipB > clipT) {
+    if (gm.showCellText && drawR > drawL && drawB > drawT) {
         SaveDC(hdc);
-        IntersectClipRect(hdc, clipL, clipT, clipR, clipB);
+        IntersectClipRect(hdc, drawL, drawT, drawR, drawB);
         for (int i = 0; i < n; ++i) {
             const float y = gridY + static_cast<float>(i) * step;
-            if (y + cell < static_cast<float>(clipT) - 1.0f ||
-                y > static_cast<float>(clipB) + 1.0f) {
+            if (y + cell < static_cast<float>(drawT) - 1.0f ||
+                y > static_cast<float>(drawB) + 1.0f) {
                 continue;
             }
             for (int j = 0; j < n; ++j) {
@@ -2214,8 +2363,8 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
                     continue;
                 }
                 const float x = gridX + static_cast<float>(j) * step;
-                if (x + cell < static_cast<float>(clipL) - 1.0f ||
-                    x > static_cast<float>(clipR) + 1.0f) {
+                if (x + cell < static_cast<float>(drawL) - 1.0f ||
+                    x > static_cast<float>(drawR) + 1.0f) {
                     continue;
                 }
                 const float value =
@@ -2225,7 +2374,8 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
                 if (!ValidCell(value)) {
                     continue;
                 }
-                const std::wstring text = Fmt(L"%.1f", static_cast<double>(value));
+                wchar_t text[32] = {};
+                swprintf_s(text, L"%.1f", static_cast<double>(value));
                 DrawTextCenter(hdc, text, gm.cellFont, g_palette.onAccent, x, y, cell, cell);
             }
         }
@@ -2233,18 +2383,23 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     }
 
     // ---- 列标签（固定顶部，逐列对齐到单元格中轴） ------------------------
-    {
+    if (target.top < clipT && target.bottom > 0) {
         SaveDC(hdc);
         IntersectClipRect(hdc, clipL, 0, clipR, clipT);
         for (int j = 0; j < n; ++j) {
             const float x = gridX + static_cast<float>(j) * step;
-            if (x + cell < static_cast<float>(clipL) - 1.0f ||
-                x > static_cast<float>(clipR) + 1.0f) {
+            if (x + cell < static_cast<float>(target.left) - 1.0f ||
+                x > static_cast<float>(target.right) + 1.0f) {
                 continue;
             }
             const bool smt = gm.showStar && j < static_cast<int>(g_app.sibling.size()) &&
                              g_app.sibling[static_cast<size_t>(j)] >= 0;
-            const std::wstring label = smt ? Fmt(L"T%d*", j) : Fmt(L"T%d", j);
+            wchar_t label[32] = {};
+            if (smt) {
+                swprintf_s(label, L"T%d*", j);
+            } else {
+                swprintf_s(label, L"T%d", j);
+            }
             DrawTextCenter(hdc, label, gm.labelFont, g_palette.textSecondary, x, 0.0f,
                            cell, gm.headerH);
         }
@@ -2252,18 +2407,23 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     }
 
     // ---- 行标签（固定左侧） ----------------------------------------------
-    {
+    if (target.left < clipL && target.right > 0) {
         SaveDC(hdc);
         IntersectClipRect(hdc, 0, clipT, clipL, clipB);
         for (int i = 0; i < n; ++i) {
             const float y = gridY + static_cast<float>(i) * step;
-            if (y + cell < static_cast<float>(clipT) - 1.0f ||
-                y > static_cast<float>(clipB) + 1.0f) {
+            if (y + cell < static_cast<float>(target.top) - 1.0f ||
+                y > static_cast<float>(target.bottom) + 1.0f) {
                 continue;
             }
             const bool smt = gm.showStar && i < static_cast<int>(g_app.sibling.size()) &&
                              g_app.sibling[static_cast<size_t>(i)] >= 0;
-            const std::wstring label = smt ? Fmt(L"T%d*", i) : Fmt(L"T%d", i);
+            wchar_t label[32] = {};
+            if (smt) {
+                swprintf_s(label, L"T%d*", i);
+            } else {
+                swprintf_s(label, L"T%d", i);
+            }
             RECT rc = {0, static_cast<LONG>(std::lround(y)),
                        static_cast<LONG>(std::lround(gm.labelW - Pxf(4.0f))),
                        static_cast<LONG>(std::lround(y + cell))};
@@ -2391,6 +2551,17 @@ void ProgressCallback(void* context, const ClProgress* progress) {
     if (hwnd == nullptr || progress == nullptr) {
         return;
     }
+    // Coalesce bursts: a 32x32 matrix produces 992 callbacks and posting one
+    // message per pair floods the UI thread.  Keep at most one every 40 ms;
+    // WM_CL_DONE always carries the complete result, so the UI cannot end up
+    // stale even when the final progress tick is dropped.
+    static ULONGLONG lastPostTick = 0;
+    const ULONGLONG now = GetTickCount64();
+    const bool finalUpdate = progress->total > 0 && progress->done >= progress->total;
+    if (!finalUpdate && now - lastPostTick < 40) {
+        return;
+    }
+    lastPostTick = now;
     auto* payload = new (std::nothrow) ProgressPayload();
     if (payload == nullptr) {
         return;
@@ -2416,6 +2587,7 @@ void FinalizeRun(ClResult* result) {
     }
     g_app.cells.assign(static_cast<size_t>(n) * static_cast<size_t>(n),
                        std::numeric_limits<float>::quiet_NaN());
+    InvalidateStatsCache();
     if (!result->aborted) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
@@ -2474,6 +2646,7 @@ void StartRun(HWND hwnd) {
     const int n = g_app.threads;
     g_app.cells.assign(static_cast<size_t>(n) * static_cast<size_t>(n),
                        std::numeric_limits<float>::quiet_NaN());
+    InvalidateStatsCache();
     g_app.pairsDone = 0;
     g_app.pairsTotal = n * (n - 1);
     g_app.elapsed = 0.0;
@@ -2527,17 +2700,38 @@ void OnProgressMessage(const ProgressPayload* payload) {
     g_app.lastJ = payload->j;
     g_app.lastNs = payload->ns;
     g_app.elapsed = payload->elapsed;
+    bool cellUpdated = false;
     if (payload->i >= 0 && payload->j >= 0 &&
         g_app.cells.size() ==
             static_cast<size_t>(g_app.threads) * static_cast<size_t>(g_app.threads)) {
         g_app.cells[static_cast<size_t>(payload->i) * g_app.threads + payload->j] =
             payload->ns;
+        InvalidateStatsCache();
+        cellUpdated = true;
     }
     // Spec 5: the status line and the progress bar change once per finished
     // thread pair -- there is no timer anywhere in this program.
     InvalidateStatus();
     InvalidateRect(g_app.progress, nullptr, FALSE);
-    InvalidateMatrix();
+    if (cellUpdated && g_app.matrix != nullptr && g_app.haveLayout) {
+        // Only the one heat cell that changed is damaged; PaintMatrix clips its
+        // back-buffer drawing to this rectangle (macOS refreshPairRow parity).
+        const GridMetrics gm = GridMetricsFromLayout(g_app.layout);
+        const float step = gm.cell + gm.gap;
+        const float scrollY = ClampF(g_app.scrollY, 0.0f, gm.maxScrollY);
+        const float scrollX = ClampF(g_app.scrollX, 0.0f, gm.maxScrollX);
+        const float gridX = gm.labelW + gm.offsetX - scrollX;
+        const float gridY = gm.headerH + gm.offsetY - scrollY;
+        const float x = gridX + static_cast<float>(payload->j) * step;
+        const float y = gridY + static_cast<float>(payload->i) * step;
+        RECT cellRect = {static_cast<LONG>(std::lround(x)) - 1,
+                         static_cast<LONG>(std::lround(y)) - 1,
+                         static_cast<LONG>(std::lround(x + gm.cell)) + 1,
+                         static_cast<LONG>(std::lround(y + gm.cell)) + 1};
+        InvalidateRect(g_app.matrix, &cellRect, FALSE);
+    } else {
+        InvalidateMatrix();
+    }
 }
 
 void OnDoneMessage(DonePayload* payload) {
@@ -2677,6 +2871,7 @@ void PositionControls(HWND) {
 }
 
 void ApplyTheme(HWND hwnd) {
+    g_gpCache.Release();
     ReleaseBrushes();
     BuildPalette();
     ApplyWindowTheme(hwnd);
@@ -2701,6 +2896,7 @@ void ApplyDpi(HWND hwnd, int dpi) {
         SendMessageW(g_app.btnExport, WM_SETFONT,
                      reinterpret_cast<WPARAM>(g_fonts.buttonSecondary), TRUE);
     }
+    g_gpCache.Release();
     g_mainBack.Release();
     g_matrixBack.Release();
     g_buttonBack.Release();
@@ -3610,6 +3806,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     g_mainBack.Release();
     g_matrixBack.Release();
     g_buttonBack.Release();
+    g_gpCache.Release();
     ReleaseBrushes();
     DestroyFonts();
     ShutdownMeasureDc();

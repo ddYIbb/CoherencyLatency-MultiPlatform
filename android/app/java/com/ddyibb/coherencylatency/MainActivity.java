@@ -16,6 +16,9 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.InputDevice;
@@ -77,6 +80,17 @@ public class MainActivity extends Activity {
     private static final int STOP_BACKGROUND = 0xFFF2F4F7;
     private static final int FOCUS_BACKGROUND = 0xFFEAF1FF;
 
+    /** Matrix heat scale, matched to the desktop UI: green -> orange -> red. */
+    private static final int HEAT_GREEN = 0xFF16B769;
+    private static final int HEAT_ORANGE = 0xFFF48011;
+    private static final int HEAT_RED = 0xFFF83533;
+
+    private static final byte CELL_STALE = 0;
+    private static final byte CELL_VALUE = 1;
+    private static final byte CELL_NA = 2;
+    private static final byte CELL_PENDING = 3;
+    private static final byte CELL_DIAGONAL = 4;
+
     private ScrollView scrollView;
     private TextView infoText;
     private TextView statusText;
@@ -92,6 +106,24 @@ public class MainActivity extends Activity {
     private int logicalCores = 2;
     private int n = 2;
     private float[] live = new float[4];
+
+    /** Cached cell text for the matrix; entries are only re-formatted when their value changes. */
+    private int matrixCacheN = -1;
+    private int matrixCacheWidth = -1;
+    private String[] matrixCells;
+    private byte[] matrixCellKind;
+    private float[] matrixCellValue;
+    private String[] matrixColumnHeaders;
+    private String[] matrixRowHeaders;
+    private int naPairs = 0;
+
+    /** Progress updates are marshalled through one reusable Runnable (no per-pair allocation). */
+    private int progressFirst;
+    private int progressSecond;
+    private float progressLatency;
+    private int progressDone;
+    private int progressTotal;
+    private final StringBuilder statusBuilder = new StringBuilder(96);
     private boolean running = false;
     private int donePairs = 0;
     private int totalPairs = 0;
@@ -105,39 +137,57 @@ public class MainActivity extends Activity {
     private boolean isWide;
     private float uiScale = 1f;
 
+    private final Runnable progressUpdate = new Runnable() {
+        @Override
+        public void run() {
+            if (!running) {
+                return;
+            }
+            final int first = progressFirst;
+            final int second = progressSecond;
+            final float latencyNs = progressLatency;
+            final int done = progressDone;
+            final int total = progressTotal;
+            donePairs = done;
+            totalPairs = total;
+            if (progressBar.getMax() != total) {
+                progressBar.setMax(total);
+            }
+            progressBar.setProgress(done);
+            statusBuilder.setLength(0);
+            statusBuilder.append("测量中 ").append(done).append('/').append(total)
+                    .append(" · C").append(first).append("↔C").append(second);
+            if (latencyNs != latencyNs) {
+                statusBuilder.append(" N/A（绑核失败）");
+            } else {
+                statusBuilder.append(' ');
+                appendTenths(statusBuilder, latencyNs);
+                statusBuilder.append(" ns · 用时 ");
+                appendTenths(statusBuilder, elapsedSeconds());
+                statusBuilder.append(" s");
+            }
+            statusText.setText(statusBuilder.toString());
+            renderMatrix(false);
+        }
+    };
+
     private final NativeBench.Progress progressCallback =
             new NativeBench.Progress() {
                 @Override
                 public void onPair(int first, int second, float latencyNs,
                                    int done, int total) {
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (!running) {
-                                return;
-                            }
-                            if (live != null && n > 0 && first < n && second < n) {
-                                live[first * n + second] = latencyNs;
-                            }
-                            donePairs = done;
-                            totalPairs = total;
-                            if (progressBar.getMax() != total) {
-                                progressBar.setMax(total);
-                            }
-                            progressBar.setProgress(done);
-                            if (latencyNs != latencyNs) {
-                                statusText.setText(String.format(Locale.US,
-                                        "测量中 %d/%d · C%d↔C%d N/A（绑核失败）",
-                                        done, total, first, second));
-                            } else {
-                                statusText.setText(String.format(Locale.US,
-                                        "测量中 %d/%d · C%d↔C%d %.1f ns · 用时 %.1f s",
-                                        done, total, first, second, latencyNs,
-                                        elapsedSeconds()));
-                            }
-                            renderMatrix(false);
-                        }
-                    });
+                    // Store the sample immediately: if several callbacks arrive
+                    // before the UI thread drains its queue, the shared fields
+                    // only keep the newest values but no matrix entry is lost.
+                    if (live != null && n > 0 && first < n && second < n) {
+                        live[first * n + second] = latencyNs;
+                    }
+                    progressFirst = first;
+                    progressSecond = second;
+                    progressLatency = latencyNs;
+                    progressDone = done;
+                    progressTotal = total;
+                    runOnUiThread(progressUpdate);
                 }
             };
 
@@ -434,7 +484,7 @@ public class MainActivity extends Activity {
 
         matrixText = text("", isWatch ? 10f : 12.5f, TEXT_PRIMARY, false);
         matrixText.setTypeface(Typeface.MONOSPACE);
-        matrixText.setTextIsSelectable(!isTelevision && !isWatch);
+        matrixText.setTextIsSelectable(false);
         matrixText.setFocusable(false);
         matrixText.setClickable(false);
         matrixText.setLongClickable(false);
@@ -680,60 +730,225 @@ public class MainActivity extends Activity {
     // -----------------------------------------------------------------------
 
     private void renderMatrix(boolean finalView) {
-        if (live == null || n <= 0 || live.length < n * n) {
-            matrixText.setText("");
+        if (matrixText == null) {
             return;
         }
-        int columnWidth = isWatch ? 6 : isTelevision ? 8 : 7;
-        StringBuilder builder = new StringBuilder();
-        builder.append("      ");
-        for (int column = 0; column < n; ++column) {
-            builder.append(String.format(Locale.US, "%" + columnWidth + "s", "C" + column));
+        if (live == null || n <= 0 || live.length < n * n) {
+            matrixText.setText("");
+            naPairs = 0;
+            return;
         }
-        builder.append('\n');
+        final int columnWidth = isWatch ? 6 : isTelevision ? 8 : 7;
+        ensureMatrixCache(columnWidth);
 
+        float min = Float.MAX_VALUE;
+        float max = -Float.MAX_VALUE;
+        int naCount = 0;
         for (int row = 0; row < n; ++row) {
-            builder.append(String.format(Locale.US, "%-6s", "C" + row));
+            int base = row * n;
             for (int column = 0; column < n; ++column) {
                 if (row == column) {
-                    builder.append(String.format(Locale.US, "%" + columnWidth + "s", "x"));
                     continue;
                 }
-                float value = live[row * n + column];
+                float value = live[base + column];
                 if (value != value) {
-                    builder.append(String.format(Locale.US, "%" + columnWidth + "s", "N/A"));
-                } else if (value <= 0f) {
-                    builder.append(String.format(Locale.US, "%" + columnWidth + "s", "·"));
-                } else {
-                    builder.append(String.format(Locale.US, "%" + columnWidth + ".1f", value));
+                    ++naCount;
+                } else if (value > 0f) {
+                    if (value < min) {
+                        min = value;
+                    }
+                    if (value > max) {
+                        max = value;
+                    }
                 }
+            }
+        }
+        naPairs = naCount;
+        final boolean flat = !(max - min >= 1e-6f);
+
+        StringBuilder builder = new StringBuilder(
+                n * (6 + n * columnWidth + 1) + 8);
+        builder.append("      ");
+        for (int column = 0; column < n; ++column) {
+            builder.append(matrixColumnHeaders[column]);
+        }
+        builder.append('\n');
+        for (int row = 0; row < n; ++row) {
+            builder.append(matrixRowHeaders[row]);
+            int base = row * n;
+            for (int column = 0; column < n; ++column) {
+                int index = base + column;
+                if (row == column) {
+                    if (matrixCellKind[index] != CELL_DIAGONAL) {
+                        matrixCells[index] = padLeft("x", columnWidth);
+                        matrixCellKind[index] = CELL_DIAGONAL;
+                    }
+                } else {
+                    float value = live[index];
+                    byte kind;
+                    if (value != value) {
+                        kind = CELL_NA;
+                    } else if (value <= 0f) {
+                        kind = CELL_PENDING;
+                    } else {
+                        kind = CELL_VALUE;
+                    }
+                    // Re-format only cells whose displayed value changed: the
+                    // per-pair render used to run n*n String.format calls.
+                    if (matrixCellKind[index] != kind
+                            || (kind == CELL_VALUE && Float.floatToIntBits(
+                                    matrixCellValue[index]) != Float.floatToIntBits(value))) {
+                        if (kind == CELL_VALUE) {
+                            matrixCells[index] = padLeft(formatTenths(value), columnWidth);
+                        } else if (kind == CELL_NA) {
+                            matrixCells[index] = padLeft("N/A", columnWidth);
+                        } else {
+                            matrixCells[index] = padLeft("·", columnWidth);
+                        }
+                        matrixCellKind[index] = kind;
+                        matrixCellValue[index] = value;
+                    }
+                }
+                builder.append(matrixCells[index]);
             }
             builder.append('\n');
         }
-        matrixText.setText(builder.toString());
+
+        SpannableString text = new SpannableString(builder.toString());
+        int rowStride = 6 + n * columnWidth + 1;
+        int rowStart = rowStride;
+        for (int row = 0; row < n; ++row) {
+            int base = row * n;
+            for (int column = 0; column < n; ++column) {
+                int index = base + column;
+                int start = rowStart + 6 + column * columnWidth;
+                int end = start + columnWidth;
+                byte kind = matrixCellKind[index];
+                if (kind == CELL_VALUE) {
+                    int color = flat ? HEAT_GREEN : heatColor(live[index], min, max);
+                    text.setSpan(new ForegroundColorSpan(color), start, end,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                } else if (kind == CELL_DIAGONAL || kind == CELL_PENDING
+                        || kind == CELL_NA) {
+                    text.setSpan(new ForegroundColorSpan(TEXT_SECONDARY), start, end,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+            rowStart += rowStride;
+        }
+        matrixText.setText(text);
         updateMatrixNote();
     }
 
+    /** (Re)builds the per-cell text cache when the core count or layout changes. */
+    private void ensureMatrixCache(int columnWidth) {
+        if (matrixCacheN == n && matrixCacheWidth == columnWidth
+                && matrixCells != null) {
+            return;
+        }
+        matrixCacheN = n;
+        matrixCacheWidth = columnWidth;
+        int cells = n * n;
+        matrixCells = new String[cells];
+        matrixCellKind = new byte[cells];
+        matrixCellValue = new float[cells];
+        matrixColumnHeaders = new String[n];
+        matrixRowHeaders = new String[n];
+        for (int i = 0; i < n; ++i) {
+            matrixColumnHeaders[i] = padLeft("C" + i, columnWidth);
+            matrixRowHeaders[i] = padRight("C" + i, 6);
+        }
+    }
+
+    /** Green -> orange -> red interpolation used by the matrix heat map. */
+    private static int heatColor(float value, float min, float max) {
+        if (!(max - min >= 1e-6f)) {
+            return HEAT_GREEN;
+        }
+        float t = (value - min) / (max - min);
+        if (t < 0f) {
+            t = 0f;
+        } else if (t > 1f) {
+            t = 1f;
+        }
+        final int from;
+        final int to;
+        final float k;
+        if (t <= 0.5f) {
+            from = HEAT_GREEN;
+            to = HEAT_ORANGE;
+            k = t * 2f;
+        } else {
+            from = HEAT_ORANGE;
+            to = HEAT_RED;
+            k = (t - 0.5f) * 2f;
+        }
+        int red = Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * k);
+        int green = Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * k);
+        int blue = Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * k);
+        return Color.rgb(red, green, blue);
+    }
+
     private int countNaPairs() {
-        if (live == null || n <= 0) {
-            return 0;
-        }
-        int count = 0;
-        for (int row = 0; row < n; ++row) {
-            for (int column = 0; column < n; ++column) {
-                if (row != column && live[row * n + column] != live[row * n + column]) {
-                    ++count;
-                }
-            }
-        }
-        return count;
+        return naPairs;
     }
 
     private void updateMatrixNote() {
         if (matrixNote == null) {
             return;
         }
-        matrixNote.setVisibility(countNaPairs() > 0 ? View.VISIBLE : View.GONE);
+        matrixNote.setVisibility(naPairs > 0 ? View.VISIBLE : View.GONE);
+    }
+
+    private static String padLeft(String value, int width) {
+        int padding = width - value.length();
+        if (padding <= 0) {
+            return value;
+        }
+        StringBuilder builder = new StringBuilder(width);
+        for (int i = 0; i < padding; ++i) {
+            builder.append(' ');
+        }
+        return builder.append(value).toString();
+    }
+
+    private static String padRight(String value, int width) {
+        int padding = width - value.length();
+        if (padding <= 0) {
+            return value;
+        }
+        StringBuilder builder = new StringBuilder(width);
+        builder.append(value);
+        for (int i = 0; i < padding; ++i) {
+            builder.append(' ');
+        }
+        return builder.toString();
+    }
+
+    /**
+     * One-decimal number without String.format: the progress callback and the
+     * matrix both used to allocate a formatter for every cell / every pair.
+     */
+    private static String formatTenths(double value) {
+        StringBuilder builder = new StringBuilder(8);
+        appendTenths(builder, value);
+        return builder.toString();
+    }
+
+    private static void appendTenths(StringBuilder builder, double value) {
+        if (value != value) {
+            builder.append("N/A");
+            return;
+        }
+        boolean negative = value < 0d;
+        if (negative) {
+            value = -value;
+        }
+        long tenths = Math.round(value * 10d);
+        if (negative) {
+            builder.append('-');
+        }
+        builder.append(tenths / 10L).append('.').append(tenths % 10L);
     }
 
     private String doneSummary() {
@@ -748,27 +963,42 @@ public class MainActivity extends Activity {
     // Export
     // -----------------------------------------------------------------------
 
-    private void autoSave(String csv, String name) {
-        try {
-            File base = getExternalFilesDir(null);
-            if (base == null) {
-                base = getFilesDir();
+    private void autoSave(final String csv, final String name) {
+        // The CSV write no longer runs on the UI thread; the hint is posted
+        // back so setSavedMessage() still touches its views on the main thread.
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String message;
+                try {
+                    File base = getExternalFilesDir(null);
+                    if (base == null) {
+                        base = getFilesDir();
+                    }
+                    File directory = new File(base, "results");
+                    if (!directory.exists() && !directory.mkdirs()) {
+                        throw new IOException("无法创建结果目录");
+                    }
+                    File file = new File(directory, name);
+                    FileOutputStream output = new FileOutputStream(file);
+                    try {
+                        output.write(csv.getBytes(ASCII));
+                    } finally {
+                        output.close();
+                    }
+                    message = "已自动保存：" + file.getAbsolutePath();
+                } catch (Exception error) {
+                    message = "自动保存失败：" + error.getMessage();
+                }
+                final String result = message;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        setSavedMessage(result);
+                    }
+                });
             }
-            File directory = new File(base, "results");
-            if (!directory.exists() && !directory.mkdirs()) {
-                throw new IOException("无法创建结果目录");
-            }
-            File file = new File(directory, name);
-            FileOutputStream output = new FileOutputStream(file);
-            try {
-                output.write(csv.getBytes(ASCII));
-            } finally {
-                output.close();
-            }
-            setSavedMessage("已自动保存：" + file.getAbsolutePath());
-        } catch (Exception error) {
-            setSavedMessage("自动保存失败：" + error.getMessage());
-        }
+        }, "cl-autosave").start();
     }
 
     private void exportCsv() {
@@ -780,7 +1010,7 @@ public class MainActivity extends Activity {
             // No system save dialog before Android 4.4: write a second copy
             // into the app folder and tell the user where it went.
             autoSave(lastCsv, lastCsvName);
-            Toast.makeText(this, "已保存到应用文件夹：" + lastCsvName,
+            Toast.makeText(this, "正在保存到应用文件夹：" + lastCsvName,
                     Toast.LENGTH_LONG).show();
             return;
         }
