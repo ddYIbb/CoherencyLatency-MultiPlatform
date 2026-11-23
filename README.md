@@ -9,7 +9,9 @@
 - **Android** — Android 4.1（API 16）或更高版本（命令行版四个 ABI；图形界面版为通用 APK）
 - **HarmonyOS** — HarmonyOS 5.0.0（API 12）或更高版本（手机 / 平板 / 2in1，arm64-v8a）
 
-本仓库包含跨平台源码，并在 [Releases](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases) 中发布 macOS、Windows、Android 与 HarmonyOS 四个平台的成品。HarmonyOS 版以未签名 HAP + 完整源码发布，需要自行签名后安装；其余三个平台是独立编译的成品。
+本仓库把同一套测量原则落到四个平台，每个平台保留独立的线程、亲和性、计时和打包实现。Releases 只归档构建产物，不作为跨平台能力的证明；HarmonyOS 版以未签名 HAP + 完整源码发布，需要自行签名后安装。
+
+鸿蒙移植中总结出的跨平台经验——真实落点校验、动态拓扑与无白名单、结果驱动 UI、失败如实标注——以及它们在 Windows / macOS / Android 的当前落点和缺口，见 [移植经验与跨平台落点](docs/移植经验.md)。
 
 ## 系统兼容性
 
