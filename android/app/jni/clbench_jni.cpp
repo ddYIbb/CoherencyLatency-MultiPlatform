@@ -501,7 +501,69 @@ std::string architecture_name() {
 #endif
 }
 
-// "model|logical cores|cache line|abi"
+std::string read_topology_text(const std::string& path) {
+    std::FILE* file = std::fopen(path.c_str(), "r");
+    if (file == nullptr) {
+        return {};
+    }
+    char buffer[128] = {};
+    const bool ok = std::fgets(buffer, sizeof(buffer), file) != nullptr;
+    std::fclose(file);
+    if (!ok) {
+        return {};
+    }
+    std::string value(buffer);
+    while (!value.empty() &&
+           (value.back() == '\n' || value.back() == '\r' ||
+            value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+int read_topology_int(const std::string& path) {
+    const std::string text = read_topology_text(path);
+    if (text.empty()) {
+        return -1;
+    }
+    char* end = nullptr;
+    const long value = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return -1;
+    }
+    return static_cast<int>(value);
+}
+
+// Informational only: the matrix still uses logical slots.  Returns 0 when the
+// kernel does not expose the topology, never a guessed number.
+int physical_core_count(int logical) {
+    std::vector<long long> keys;
+    keys.reserve(static_cast<std::size_t>(logical));
+    for (int cpu = 0; cpu < logical; ++cpu) {
+        const std::string base =
+            "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/";
+        const int package = read_topology_int(base + "topology/physical_package_id");
+        const int core = read_topology_int(base + "topology/core_id");
+        if (package < 0 || core < 0) {
+            continue;
+        }
+        const long long key =
+            static_cast<long long>(package) * 100000LL + core;
+        bool duplicate = false;
+        for (const long long previous : keys) {
+            if (previous == key) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            keys.push_back(key);
+        }
+    }
+    return static_cast<int>(keys.size());
+}
+
+// "model|logical cores|cache line|abi|physical cores (0 = unknown)"
 std::string device_info() {
     std::string model = read_property("ro.soc.model");
     if (model.empty()) {
@@ -530,9 +592,11 @@ std::string device_info() {
         line_size = 64;
     }
 
+    const int physical = physical_core_count(static_cast<int>(configured));
+
     char buffer[256] = {};
-    std::snprintf(buffer, sizeof(buffer), "%s|%ld|%ld|%s", model.c_str(),
-                  configured, line_size, architecture_name().c_str());
+    std::snprintf(buffer, sizeof(buffer), "%s|%ld|%ld|%s|%d", model.c_str(),
+                  configured, line_size, architecture_name().c_str(), physical);
     return std::string(buffer);
 }
 

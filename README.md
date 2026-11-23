@@ -19,11 +19,11 @@
 
 | 平台 | 成品 | 最低系统 | 支持的 CPU / 指令集 |
 |---|---|---|---|
-| macOS | `CoherencyLatency-macOS-v1.1.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
-| Windows | `CoherencyLatency-Windows-v1.1.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
-| Android（命令行） | `CoherencyLatency-Android-v1.1.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
-| Android（图形界面） | `CoherencyLatency-Android-UI-v1.1.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
-| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.6.zip`（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、平板、2in1；动态识别 2–20 个逻辑线程 |
+| macOS | `CoherencyLatency-macOS-v1.2.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
+| Windows | `CoherencyLatency-Windows-v1.2.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+| Android（命令行） | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
+| Android（图形界面） | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
+| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip`（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、平板、2in1；动态识别 2–20 个逻辑线程 |
 
 几点说明：
 
@@ -41,15 +41,15 @@
 
 ## 下载
 
-最新版本：macOS / Windows / Android 为 [v1.1.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.1.0)；HarmonyOS 为 [v1.2.6](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.6)。
+最新版本：[v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)（macOS / Windows / Android / HarmonyOS 四平台统一版本号）。
 
 | 平台 | Release 文件 |
 |---|---|
-| macOS | [CoherencyLatency-macOS-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-macOS-v1.1.0.zip) |
-| Windows | [CoherencyLatency-Windows-v1.1.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Windows-v1.1.0.exe) |
-| Android（命令行） | [CoherencyLatency-Android-v1.1.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-v1.1.0.zip) |
-| Android（图形界面） | [CoherencyLatency-Android-UI-v1.1.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.1.0/CoherencyLatency-Android-UI-v1.1.0.apk) |
-| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.6.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.6/CoherencyLatency-HarmonyOS-v1.2.6.zip) |
+| macOS | [CoherencyLatency-macOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-v1.2.0.zip) |
+| Windows | [CoherencyLatency-Windows-v1.2.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-v1.2.0.exe) |
+| Android（命令行） | [CoherencyLatency-Android-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-v1.2.0.zip) |
+| Android（图形界面） | [CoherencyLatency-Android-UI-v1.2.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-UI-v1.2.0.apk) |
+| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-HarmonyOS-v1.2.0.zip) |
 
 macOS 版下载后解压得到一个可执行文件。如果首次打开被 Gatekeeper 拦截，请右键选择“打开”，或执行 `xattr -dr com.apple.quarantine CoherencyLatency` 清除隔离属性。
 

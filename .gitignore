@@ -44,6 +44,17 @@ Thumbs.db
 /CoherencyLatency-*.zip
 /CoherencyLatency-*.exe
 
+# macOS build tree (release zips are built from it but not committed)
+/macos/build/
+
+# Scratch files
+/CON
+/affinity_wrap*.py
+/make_fat.py
+/run_launcher.py
+/build_launcher.bat
+/win_launcher_smoke.csv
+
 # HarmonyOS build trees and local signing files
 /harmonyos/.hvigor/
 /harmonyos/oh_modules/

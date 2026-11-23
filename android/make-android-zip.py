@@ -3,8 +3,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT.parent / "CoherencyLatency-Android-v1.1.0.zip"
-FOLDER = "CoherencyLatency-Android-v1.1.0"
+OUT = ROOT.parent / "CoherencyLatency-Android-v1.2.0.zip"
+FOLDER = "CoherencyLatency-Android-v1.2.0"
 
 FILES = [
     ("build/CoherencyLatency-arm64-v8a", 0o755, "CoherencyLatency-arm64-v8a"),

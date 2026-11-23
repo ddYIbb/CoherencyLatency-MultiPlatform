@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ddyibb.coherencylatency"
-    android:versionCode="4"
-    android:versionName="1.1.0-android-ui">
+    android:versionCode="5"
+    android:versionName="1.2.0">
 
     <!-- 32-bit ARM/x86 run from Android 4.1 (API 16); the 64-bit slices in the
          same APK are only loaded on Android 5.0+ devices. -->

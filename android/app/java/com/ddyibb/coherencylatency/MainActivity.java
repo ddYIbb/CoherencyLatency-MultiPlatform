@@ -491,6 +491,7 @@ public class MainActivity extends Activity {
         int logical = 2;
         int cacheLine = 64;
         String abi = "unknown";
+        int physical = 0;
         if (raw != null) {
             String[] parts = raw.split("\\|");
             if (parts.length > 0 && !parts[0].isEmpty()) {
@@ -505,10 +506,16 @@ public class MainActivity extends Activity {
             if (parts.length > 3) {
                 abi = parts[3];
             }
+            if (parts.length > 4) {
+                physical = safeInt(parts[4], 0);
+            }
         }
         logical = Math.max(1, Math.min(logical, 32));
-        String deviceLine = model + "\n" + logical + " 个逻辑核心 · " +
-                cacheLine + " B 缓存行";
+        String deviceLine = model + "\n" + logical + " 个逻辑核心";
+        if (physical > 0) {
+            deviceLine += " · " + physical + " 个物理核";
+        }
+        deviceLine += " · " + cacheLine + " B 缓存行";
         if (!isWatch) {
             deviceLine += " · " + abi;
         }

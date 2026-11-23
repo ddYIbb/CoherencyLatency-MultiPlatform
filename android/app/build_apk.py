@@ -27,7 +27,7 @@ BUILD_TOOLS = os.path.join(SDK, "build-tools", "31.0.0")
 ANDROID_JAR = os.path.join(SDK, "platforms", "android-31", "android.jar")
 
 PACKAGE = "com.ddyibb.coherencylatency"
-APK_NAME = "CoherencyLatency-Android-UI-v1.1.0.apk"
+APK_NAME = "CoherencyLatency-Android-UI-v1.2.0.apk"
 
 BUILD = os.path.join(HERE, "build")
 RES_ZIP = os.path.join(BUILD, "res.zip")
@@ -118,8 +118,8 @@ def build_resources():
     run([os.path.join(BUILD_TOOLS, "aapt2.exe"), "link", "-o", "build/base.apk",
          "-I", ANDROID_JAR, "--manifest", "AndroidManifest.xml",
          "--java", "build/gen", "--min-sdk-version", str(MIN_SDK),
-         "--target-sdk-version", "31", "--version-code", "4",
-         "--version-name", "1.1.0-android-ui", "build/res.zip"],
+         "--target-sdk-version", "31", "--version-code", "5",
+         "--version-name", "1.2.0", "build/res.zip"],
         cwd=HERE)
 
 

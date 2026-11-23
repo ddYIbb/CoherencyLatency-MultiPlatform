@@ -23,10 +23,10 @@
 </head>
 <body>
 <h1>CoherencyLatency Android 使用手册</h1>
-<p><strong>版本：</strong> 1.1.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Android 4.1（API 16）及以上，arm64-v8a / armeabi-v7a / x86 / x86_64 四种 ABI。   <strong>运行方式：</strong> 命令行程序（Termux 或 adb shell），没有图形界面，也不是 APK。</p>
+<p><strong>版本：</strong> 1.2.0（对应 MicroBenchX 1.0.5）   <strong>适用平台：</strong> Android 4.1（API 16）及以上，arm64-v8a / armeabi-v7a / x86 / x86_64 四种 ABI。   <strong>运行方式：</strong> 命令行程序（Termux 或 adb shell），没有图形界面，也不是 APK。</p>
 <blockquote><p><strong>重要限制</strong>：Android 的 <code>sched_setaffinity</code> 只是“请求”。big.LITTLE 调度器、cgroup 和厂商内核都可能覆盖掩码。 程序会<strong>校验</strong>绑定结果：每个线程在开始前用 <code>sched_getaffinity</code> 确认掩码、用 <code>sched_getcpu()</code> 确认自己真的落在目标 CPU 上， 每轮测量前后再复核一次。任何一个线程没绑住，这个核心对（含转置格）就写 <code>N/A</code>，不会拿错核上的数字冒充结果。 即使校验通过，矩阵里的 <code>i</code>/<code>j</code> 也只是逻辑槽位，不等于物理核心编号。</p></blockquote>
 <h2>1. 文件说明</h2>
-<pre><code>CoherencyLatency-Android-v1.1.0/
+<pre><code>CoherencyLatency-Android-v1.2.0/
 ├── CoherencyLatency-arm64-v8a      主流手机（64 位 ARM），推荐
 ├── CoherencyLatency-armeabi-v7a    老设备（32 位 ARM），Android 4.1+
 ├── CoherencyLatency-x86            32 位 x86 模拟器 / Atom 平板

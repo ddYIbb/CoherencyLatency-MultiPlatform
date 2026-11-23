@@ -74,7 +74,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "1.1.0-android";
+constexpr const char* kVersion = "1.2.0";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are 128 bytes, ARM/ARM64 Android devices and x86
@@ -168,6 +168,15 @@ struct Options {
     bool show_version = false;
 };
 
+struct CoreTopology {
+    bool known = false;
+    int package = -1;
+    int core = -1;
+    int capacity = 0;
+    long max_freq_khz = 0;
+    std::string siblings;
+};
+
 struct CpuInfo {
     int logical = 1;
     int physical = 0;
@@ -175,6 +184,7 @@ struct CpuInfo {
     int perf_level1 = 0;
     int cache_line = 64;
     std::string model;
+    std::vector<CoreTopology> topology;
 };
 
 struct MatrixResult {
@@ -280,6 +290,60 @@ int perf_level_cores(const char* name) {
 }
 #endif  // defined(__APPLE__)
 
+#if defined(__ANDROID__)
+// Android does not expose a stable topology API below the NDK, but the kernel
+// sysfs files are readable on the stock images this port targets.  Read them
+// best-effort: an absent or permission-denied file is reported as unknown, it
+// never makes the matrix fail.  The benchmark keeps using logical slots.
+bool read_sysfs_text(const std::string& path, std::string& value) {
+    std::FILE* file = std::fopen(path.c_str(), "r");
+    if (file == nullptr) {
+        return false;
+    }
+    char buffer[128] = {};
+    const bool ok = std::fgets(buffer, sizeof(buffer), file) != nullptr;
+    std::fclose(file);
+    if (!ok) {
+        return false;
+    }
+    value = buffer;
+    while (!value.empty() &&
+           (value.back() == '\n' || value.back() == '\r' ||
+            value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    return !value.empty();
+}
+
+bool read_sysfs_int(const std::string& path, int& value) {
+    std::string text;
+    if (!read_sysfs_text(path, text)) {
+        return false;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool read_sysfs_long(const std::string& path, long& value) {
+    std::string text;
+    if (!read_sysfs_text(path, text)) {
+        return false;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+#endif  // defined(__ANDROID__)
+
 CpuInfo read_cpu_info() {
     CpuInfo info;
 
@@ -328,9 +392,43 @@ CpuInfo read_cpu_info() {
     if (info.logical <= 0) {
         info.logical = static_cast<int>(std::thread::hardware_concurrency());
     }
-    // Do not claim a physical-core count: Android does not expose the
-    // topology in a stable way, and the matrix only uses logical slots.
-    info.physical = info.logical;
+    // Read the kernel's best-effort topology description.  The matrix itself
+    // still uses logical slots, because the vendor scheduler may ignore a
+    // physical-core identity; these fields are informational and are printed
+    // by --list so a P/E or SMT layout is visible instead of guessed.
+    info.physical = 0;
+    info.topology.resize(static_cast<std::size_t>(info.logical));
+    int physical_cores_seen = 0;
+    for (int cpu = 0; cpu < info.logical; ++cpu) {
+        const std::string base =
+            "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/";
+        CoreTopology& core = info.topology[static_cast<std::size_t>(cpu)];
+        int package = -1;
+        int core_id = -1;
+        if (read_sysfs_int(base + "topology/physical_package_id", package) &&
+            read_sysfs_int(base + "topology/core_id", core_id)) {
+            core.known = true;
+            core.package = package;
+            core.core = core_id;
+            bool duplicate = false;
+            for (int previous = 0; previous < cpu; ++previous) {
+                const CoreTopology& other =
+                    info.topology[static_cast<std::size_t>(previous)];
+                if (other.known && other.package == package &&
+                    other.core == core_id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                ++physical_cores_seen;
+            }
+        }
+        read_sysfs_text(base + "topology/thread_siblings_list", core.siblings);
+        read_sysfs_int(base + "cpu_capacity", core.capacity);
+        read_sysfs_long(base + "cpufreq/cpuinfo_max_freq", core.max_freq_khz);
+    }
+    info.physical = physical_cores_seen;
 
     // Most ARM64 kernels answer this; a few vendor kernels return 0, in which
     // case the 64-byte default from CpuInfo is kept.
@@ -359,9 +457,11 @@ CpuInfo read_cpu_info() {
     if (info.logical <= 0) {
         info.logical = 1;
     }
+#if !defined(__ANDROID__) && !defined(_WIN32)
     if (info.physical <= 0) {
         info.physical = info.logical;
     }
+#endif
     if (info.cache_line < 32 || info.cache_line > 4096) {
         info.cache_line = 64;
     }
@@ -381,7 +481,39 @@ CpuInfo read_cpu_info() {
 void print_cpu_info(const CpuInfo& info) {
     std::printf("CPU: %s\n", info.model.empty() ? "unknown" : info.model.c_str());
     std::printf("Logical CPUs: %d\n", info.logical);
+#if defined(__ANDROID__)
+    if (info.physical > 0) {
+        std::printf("Physical cores (sysfs package/core): %d\n", info.physical);
+    } else {
+        std::printf("Physical cores: unknown (logical slots only)\n");
+    }
+#else
     std::printf("Physical CPUs: %d\n", info.physical);
+#endif
+#if defined(__ANDROID__)
+    if (!info.topology.empty()) {
+        std::printf("Topology (sysfs, informational; matrix indices stay logical):\n");
+        for (std::size_t cpu = 0; cpu < info.topology.size(); ++cpu) {
+            const CoreTopology& core = info.topology[cpu];
+            if (!core.known) {
+                std::printf("  CPU %zu: topology unavailable\n", cpu);
+                continue;
+            }
+            std::printf("  CPU %zu: package %d, core %d", cpu, core.package,
+                        core.core);
+            if (!core.siblings.empty()) {
+                std::printf(", siblings %s", core.siblings.c_str());
+            }
+            if (core.capacity > 0) {
+                std::printf(", capacity %d", core.capacity);
+            }
+            if (core.max_freq_khz > 0) {
+                std::printf(", max %ld MHz", core.max_freq_khz / 1000);
+            }
+            std::printf("\n");
+        }
+    }
+#endif
 #if defined(_M_ARM64) || defined(__aarch64__)
     std::printf("Architecture: ARM64 (aarch64)\n");
 #elif defined(__arm__)

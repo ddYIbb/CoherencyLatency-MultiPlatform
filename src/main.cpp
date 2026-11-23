@@ -63,7 +63,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "1.1.0-macos";
+constexpr const char* kVersion = "1.2.0";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are commonly 128 bytes; keep this a compile-time
@@ -335,7 +335,7 @@ void print_cpu_info(const CpuInfo& info) {
                 "verified)\n");
 #elif defined(__APPLE__)
     std::printf("Affinity: best-effort scheduler hint only "
-                "(macOS does not expose hard CPU pinning)\n");
+                "(unverified; macOS does not expose hard CPU pinning)\n");
 #else
     std::printf("Affinity: platform fallback\n");
 #endif
@@ -1090,8 +1090,9 @@ int main(int argc, char** argv) {
         print_cpu_info(cpu);
 
 #if defined(__APPLE__)
-        std::printf("Placement: macOS provides no hard CPU pinning; matrix indices "
-                    "are logical slots, not verified physical core IDs.\n");
+        std::printf("Placement: best-effort only; matrix indices are logical "
+                    "slots, not verified physical core IDs and not a per-core "
+                    "guarantee.\n");
 #endif
 
 #if defined(__APPLE__)
@@ -1134,6 +1135,14 @@ int main(int argc, char** argv) {
                     mode_name(options.mode), cpu_count,
                     static_cast<unsigned long long>(options.iterations),
                     static_cast<unsigned long long>(options.runs));
+#if defined(__APPLE__)
+        std::printf("Placement: %s\n",
+                    options.use_affinity
+                        ? "best-effort hint (unverified); macOS may move a "
+                          "worker between cores during a run"
+                        : "disabled; results describe the scheduler's own "
+                          "placement");
+#endif
 
         if (!options.assume_yes) {
             wait_for_enter("Press Enter to start the test...");

@@ -1,7 +1,7 @@
 # CoherencyLatency HarmonyOS 版
 
-**状态：** 已在 HarmonyOS 真机（nova 12 Ultra / AL00U，HarmonyOS 5.0.0）跑通，版本 1.2.6。  
-**发布包：** [v1.2.6](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.6)（未签名 HAP + 完整源码 + 使用手册 + 自行签名说明）。  
+**状态：** 已在 HarmonyOS 真机（nova 12 Ultra / AL10U，HarmonyOS 5.0.0）跑通，版本 1.2.0。  
+**发布包：** [v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)（未签名 HAP + 完整源码 + 使用手册 + 自行签名说明）。  
 **许可：** MIT，基于 CapFrameX 的 [MicroBenchX v1.0.5](https://github.com/CXWorld/MicroBenchX)。
 
 本目录是 `CoherencyLatency` 的鸿蒙原生移植：测量核心用 C++ 写成 NAPI 原生模块，界面用 ArkTS 编写。它测量一条缓存行在两个逻辑线程之间往返一次需要多少纳秒（ns），输出 N×N 线程对矩阵和分号分隔的 CSV。
@@ -20,7 +20,7 @@
 
 | 层次 | 内容 |
 |---|---|
-| 已验证 | AL00U（Kirin 9000SL，9 线程 / 6 物理核 / 3 簇，HarmonyOS 5.0.0）：1.2.6 跑出 72/72、0 N/A、40.04 s，平均 88.5 / 最小 28.6 / 最大 111.5 ns；1.2.5 开发期累计 18 次 72/72、0 N/A |
+| 已验证 | AL10U（nova 12 Ultra 星耀版，Kirin 9000SL，9 线程 / 6 物理核 / 3 簇，HarmonyOS 5.0.0）：1.2.0 最终验收 72/72、0 N/A、65.28 s，平均 97.9 / 最小 24.5 / 最大 126.6 ns；另在 AL00U 同规格真机上完成开发期验证 |
 | 设计支持 | HarmonyOS 5.0.0（API 12）及以上；phone / tablet / 2in1；arm64-v8a 真机、x86_64 模拟器；2–20 线程；有/无 SMT、单簇/多簇、大小核/多簇均由 sysfs 实测适配 |
 | 未验证 | HarmonyOS 4.x 及更早；32 位 ABI；未逐台实测的后续机型与新 SoC 的调度行为 |
 
@@ -35,7 +35,7 @@
 - **绑核重试：** 最高性能核 40 轮、普通跨核 8 轮、普通同核 20 轮；最高性能核交叉对再用精确单线程掩码回退最多 24 次（间隔 20 ms）。
 - **UI 刷新：** 原生侧每完成一个线程对才递增 `done`，界面只在 `done` 变化时刷新一次，用时不会每 120 ms 跳动。
 
-9×9 在 AL00U 上通常约 25–90 秒；20×20 需要数分钟。线程越多、绑核重试越多，用时越长。
+9×9 通常约 25–90 秒（设备调度状态好时更快）；20×20 需要数分钟。线程越多、绑核重试越多，用时越长。
 
 ## 4. 构建
 
@@ -77,7 +77,7 @@ hdc shell aa start -a EntryAbility -b com.example.coherencylatency
 - [使用手册](docs/使用手册.md)（[PDF](docs/使用手册.pdf)）
 - [主界面截图](docs/screenshots/主界面.jpg)
 - [测试结果截图](docs/screenshots/测试结果.jpg)
-- 发布包：[v1.2.6](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.6)
+- 发布包：[v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)
 
 ## 7. 许可
 

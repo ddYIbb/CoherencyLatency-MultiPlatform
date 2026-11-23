@@ -2909,7 +2909,7 @@ std::string architecture_name() {
 }
 
 napi_value GetVersion(napi_env env, napi_callback_info) {
-    return make_string(env, "1.2.6-harmonyos");
+    return make_string(env, "1.2.0");
 }
 
 // sysconf() in the OHOS sysroot has no _SC_LEVEL1_DCACHE_LINESIZE, so the

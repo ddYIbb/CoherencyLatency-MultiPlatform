@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>CoherencyLatency Android 图形界面版 · 使用说明</h1>
-<p><strong>版本：</strong> 1.1.0（versionName <code>1.1.0-android-ui</code>，versionCode 4，2026-11-21 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.1.0.apk</code>（447,639 B / 437.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5）</p>
+<p><strong>版本：</strong> 1.2.0（versionName <code>1.2.0</code>，versionCode 5，2026-11-23 构建） <strong>安装包：</strong> <code>CoherencyLatency-Android-UI-v1.2.0.apk</code>（529,559 B / 517.1 KiB） <strong>适用系统：</strong> Android 4.1（API 16）及以上 <strong>架构：</strong> 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择 <strong>界面：</strong> 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配 <strong>许可：</strong> MIT（基于 CapFrameX 的 MicroBenchX v1.0.5）</p>
 <hr>
 <h2>1. 这是什么</h2>
 <p><code>CoherencyLatency</code> 测量一条缓存行在两个逻辑 CPU 之间来回传递需要多少纳秒。它来自 <a href="https://github.com/CXWorld/MicroBenchX">MicroBenchX v1.0.5</a> 的 <code>CoherencyLatency</code>，本 APK 是它的 Android 原生移植版， 测量核心用 C++ 写成（<code>libclbench.so</code>），外面套一层轻量 Java 界面：</p>
@@ -39,18 +39,18 @@
 <h3>2.1 手机 / 平板</h3>
 <p>任选一种方式把 APK 传到设备：</p>
 <ul><li>数据线：选「文件传输 / MTP」，把 APK 拷进「下载」目录；</li><li>网盘 / 微信文件传输助手 / 邮件附件：先存到设备，再从文件管理器打开；</li><li><code>adb install</code>（调试用）：</li></ul>
-<pre><code>adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<pre><code>adb install -r CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>Android 4.1~7：设置 → 安全 → 允许「未知来源」（4.x 在「设置 → 安全 → 未知来源」）。</p>
 <p>Android 8 及以上：点开 APK 后系统会提示「为了安装此应用，请允许此来源」， 打开对应文件管理器/浏览器的开关，返回后继续安装即可。</p>
 <p>Android 4.1~4.4 上没有系统的「保存到…」文件选择器，<strong>导出 CSV…</strong> 按钮会直接把文件 存到应用私有目录并提示路径，取文件用数据线或 <code>adb pull</code>（见 6.5 节）。</p>
 <h3>2.2 Android TV / 电视盒子</h3>
 <p>电视通常没有文件管理器，推荐用 adb 安装：</p>
 <pre><code>adb connect 192.168.1.50:5555     # 电视开启「网络调试」后；USB 调试也可
-adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+adb install -r CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>装好后在电视的「应用」列表里会出现 <strong>CoherencyLatency</strong>（带 TV 横幅）。 部分品牌电视会限制第三方 APK，需要在开发者选项里允许「未知来源」或关闭安装校验。 电视没有触摸屏，全程用遥控器操作，见 3.4 节。</p>
 <h3>2.3 Wear OS 手表</h3>
 <p>手表用 adb 安装（先在手表开发者选项里开启「ADB 调试」，USB 或 Wi-Fi adb 均可）：</p>
-<pre><code>adb install -r CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<pre><code>adb install -r CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>APK 里已声明 <code>com.google.android.wearable.standalone = true</code>，可以独立运行。 部分手表系统对第三方 APK 有额外限制，装不上时请以实际系统提示为准。 圆形表盘的布局是按 454×454 圆形屏幕做的，见 3.3 节。</p>
 <h3>2.4 安装并打开</h3>
 <p>桌面出现蓝色矩阵图标 <strong>CoherencyLatency</strong>，点开即可。首次启动约 1 秒。</p>
@@ -172,7 +172,7 @@ Core 3;34.1536;31.998;30.775;x</code></pre>
 <p>APK SHA-256：</p>
 <pre><code>fe4e174639f83fec12c3288fa91ed07e1ac33883a04a48c1bf681d4074e0cda4</code></pre>
 <p>设备上可用 Termux 校验：</p>
-<pre><code>sha256sum CoherencyLatency-Android-UI-v1.1.0.apk</code></pre>
+<pre><code>sha256sum CoherencyLatency-Android-UI-v1.2.0.apk</code></pre>
 <p>源码在 <code>Android-移植/app/</code>：</p>
 <pre><code>app/
 ├── AndroidManifest.xml
@@ -190,6 +190,6 @@ Core 3;34.1536;31.998;30.775;x</code></pre>
 <p>桌面长按图标 → 应用信息 → 卸载；或 设置 → 应用 → CoherencyLatency → 卸载。 应用私有目录里的历史 CSV 会一并删除，需要保留的先导出。</p>
 <hr>
 <h2>12. 版本与许可</h2>
-<ul><li>版本：1.1.0（versionCode 4，对应 MicroBenchX v1.0.5 的算法与输出格式）</li><li>系统支持：Android 4.1（API 16）及以上</li><li>架构：arm64-v8a / armeabi-v7a / x86 / x86_64 四合一</li><li>界面适配：手机 / 平板 / 圆形手表 / Android TV</li><li>结果标记：绑核失败的核心对显示 N/A（CSV 同）</li><li>上游：&lt;https://github.com/CXWorld/MicroBenchX&gt;（MIT，Copyright (c) 2021 CapFrameX）</li><li>本移植版同样使用 MIT 许可，详见文件夹内的 <code>LICENSE</code>。</li></ul>
+<ul><li>版本：1.2.0（versionCode 5，对应 MicroBenchX v1.0.5 的算法与输出格式）</li><li>系统支持：Android 4.1（API 16）及以上</li><li>架构：arm64-v8a / armeabi-v7a / x86 / x86_64 四合一</li><li>界面适配：手机 / 平板 / 圆形手表 / Android TV</li><li>结果标记：绑核失败的核心对显示 N/A（CSV 同）</li><li>上游：&lt;https://github.com/CXWorld/MicroBenchX&gt;（MIT，Copyright (c) 2021 CapFrameX）</li><li>本移植版同样使用 MIT 许可，详见文件夹内的 <code>LICENSE</code>。</li></ul>
 </body>
 </html>

@@ -63,7 +63,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "1.1.0-compat";
+constexpr const char* kVersion = "1.2.0";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are commonly 128 bytes; keep this a compile-time
@@ -100,6 +100,67 @@ struct StartGate {
     std::atomic<int> round_done{0};
     std::atomic<bool> abort{false};
 };
+
+// One logical slot in the flattened, process-wide CPU numbering.  Windows
+// exposes processors as (group, number) pairs once a machine has more than 64
+// logical CPUs; keeping the mapping explicit lets the matrix cover all of them
+// with SetThreadGroupAffinity instead of silently wrapping at 64.
+struct CpuSlot {
+    int group = 0;
+    int processor = 0;
+};
+
+struct CpuTopology {
+    int groups = 1;
+    std::vector<int> group_sizes;
+    std::vector<CpuSlot> slots;
+
+    void refresh() {
+#if defined(_WIN32)
+        groups = 1;
+        group_sizes.clear();
+        slots.clear();
+        const WORD count = GetActiveProcessorGroupCount();
+        if (count > 0) {
+            groups = static_cast<int>(count);
+        }
+        for (int group = 0; group < groups; ++group) {
+            const DWORD active =
+                GetActiveProcessorCount(static_cast<WORD>(group));
+            group_sizes.push_back(static_cast<int>(active));
+            for (DWORD processor = 0; processor < active; ++processor) {
+                slots.push_back(
+                    CpuSlot{group, static_cast<int>(processor)});
+            }
+        }
+#else
+        int logical = static_cast<int>(std::thread::hardware_concurrency());
+        if (logical <= 0) {
+            logical = 1;
+        }
+        groups = 1;
+        group_sizes.assign(1, logical);
+        slots.clear();
+        slots.reserve(static_cast<std::size_t>(logical));
+        for (int processor = 0; processor < logical; ++processor) {
+            slots.push_back(CpuSlot{0, processor});
+        }
+#endif
+    }
+
+    int logical_count() const {
+        return static_cast<int>(slots.size());
+    }
+
+    CpuSlot slot(int index) const {
+        if (index < 0 || index >= static_cast<int>(slots.size())) {
+            return CpuSlot{-1, -1};
+        }
+        return slots[static_cast<std::size_t>(index)];
+    }
+};
+
+CpuTopology g_topology;
 
 struct ThreadConfig {
     std::uint64_t start = 0;
@@ -252,6 +313,7 @@ int perf_level_cores(const char* name) {
 
 CpuInfo read_cpu_info() {
     CpuInfo info;
+    g_topology.refresh();
 
 #if defined(__APPLE__)
     info.logical = sysctl_int("hw.logicalcpu", 0);
@@ -263,28 +325,12 @@ CpuInfo read_cpu_info() {
 #endif
 
 #if defined(_WIN32)
-    // GetSystemInfo is available on every supported Windows version.  On
-    // modern systems try GetActiveProcessorCount dynamically so >64 logical
-    // CPUs are still reported without adding a Windows 7-only import.
-    SYSTEM_INFO system_info{};
-    GetSystemInfo(&system_info);
-    if (system_info.dwNumberOfProcessors > 0) {
-        info.logical = static_cast<int>(system_info.dwNumberOfProcessors);
-    }
-    if (info.logical <= 1) {
-        using GetActiveProcessorCountFn = DWORD(WINAPI*)(WORD);
-        const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-        const auto get_active = kernel
-            ? reinterpret_cast<GetActiveProcessorCountFn>(
-                  GetProcAddress(kernel, "GetActiveProcessorCount"))
-            : nullptr;
-        if (get_active != nullptr) {
-            const DWORD active = get_active(0xFFFF);
-            if (active > 0) {
-                info.logical = static_cast<int>(active);
-            }
-        }
-    }
+    // g_topology.refresh() has already enumerated every processor group, so
+    // this covers machines with more than 64 logical CPUs as well.  Windows
+    // does not expose a stable physical-core number to user mode; leave it
+    // unknown rather than presenting logical processors as physical cores.
+    info.logical = g_topology.logical_count();
+    info.physical = 0;
 #else
     if (info.logical <= 0) {
         info.logical = static_cast<int>(std::thread::hardware_concurrency());
@@ -293,9 +339,11 @@ CpuInfo read_cpu_info() {
     if (info.logical <= 0) {
         info.logical = 1;
     }
+#if !defined(_WIN32)
     if (info.physical <= 0) {
         info.physical = info.logical;
     }
+#endif
     if (info.cache_line < 32 || info.cache_line > 4096) {
         info.cache_line = 64;
     }
@@ -315,7 +363,19 @@ CpuInfo read_cpu_info() {
 void print_cpu_info(const CpuInfo& info) {
     std::printf("CPU: %s\n", info.model.empty() ? "unknown" : info.model.c_str());
     std::printf("Logical CPUs: %d\n", info.logical);
-    std::printf("Physical CPUs: %d\n", info.physical);
+    if (info.physical > 0) {
+        std::printf("Physical CPUs: %d\n", info.physical);
+    } else {
+        std::printf("Physical CPUs: unknown (logical slots only)\n");
+    }
+#if defined(_WIN32)
+    std::printf("Processor groups: %d", g_topology.groups);
+    for (std::size_t index = 0; index < g_topology.group_sizes.size(); ++index) {
+        std::printf("%s%d", index == 0 ? " (" : " + ",
+                    g_topology.group_sizes[index]);
+    }
+    std::printf(" logical CPUs)\n");
+#endif
 #if defined(_M_ARM64)
     std::printf("Architecture: ARM64\n");
 #elif defined(_M_X64)
@@ -331,13 +391,13 @@ void print_cpu_info(const CpuInfo& info) {
     }
     std::printf("Cache line: %d bytes\n", info.cache_line);
 #if defined(_WIN32)
-    std::printf("Affinity: SetThreadAffinityMask (logical processor pinning, "
-                "verified)\n");
+    std::printf("Affinity: SetThreadGroupAffinity (processor-group aware, "
+                "placement verified)\n");
 #elif defined(__APPLE__)
-    std::printf("Affinity: best-effort scheduler hint only "
+    std::printf("Affinity: best-effort / unverified scheduler hint "
                 "(macOS does not expose hard CPU pinning)\n");
 #else
-    std::printf("Affinity: platform fallback\n");
+    std::printf("Affinity: sched_setaffinity (placement verified)\n");
 #endif
 }
 
@@ -384,27 +444,32 @@ bool configure_current_thread(int cpu_index, bool use_affinity) {
 #elif defined(_WIN32)
     bool ok = true;
     if (use_affinity) {
-#if defined(_WIN64)
-        const std::uintptr_t mask =
-            static_cast<std::uintptr_t>(1) << (cpu_index & 63);
-#else
-        const std::uintptr_t mask =
-            static_cast<std::uintptr_t>(1) << (cpu_index & 31);
-#endif
-        // A zero return value means the mask was rejected (for example a
-        // processor group that the thread cannot use).  Verify the actual
-        // placement afterwards, because the mask alone is only a request.
-        ok = SetThreadAffinityMask(GetCurrentThread(),
-                                   static_cast<DWORD_PTR>(mask)) != 0;
+        const CpuSlot wanted = g_topology.slot(cpu_index);
+        if (wanted.group < 0) {
+            return false;
+        }
+        // Processor groups are mandatory above 64 logical CPUs.  Assigning the
+        // thread to the group first and then applying a single bit inside that
+        // group is the only way to address every CPU; a plain
+        // SetThreadAffinityMask would wrap at 64.
+        GROUP_AFFINITY affinity = {};
+        affinity.Group = static_cast<WORD>(wanted.group);
+        affinity.Mask = static_cast<KAFFINITY>(1)
+                        << (wanted.processor & (sizeof(KAFFINITY) * 8 - 1));
+        ok = SetThreadGroupAffinity(GetCurrentThread(), &affinity, nullptr) != 0;
         if (ok) {
-            for (int attempt = 0; attempt < 64; ++attempt) {
-                if (GetCurrentProcessorNumber() ==
-                    static_cast<DWORD>(cpu_index)) {
+            PROCESSOR_NUMBER actual = {};
+            for (int attempt = 0; attempt < 128; ++attempt) {
+                GetCurrentProcessorNumberEx(&actual);
+                if (actual.Group == affinity.Group &&
+                    static_cast<int>(actual.Number) == wanted.processor) {
                     break;
                 }
                 yield_current_thread();
             }
-            ok = GetCurrentProcessorNumber() == static_cast<DWORD>(cpu_index);
+            GetCurrentProcessorNumberEx(&actual);
+            ok = actual.Group == affinity.Group &&
+                 static_cast<int>(actual.Number) == wanted.processor;
         }
     }
     return ok;
@@ -561,6 +626,26 @@ private:
                 return;
             }
             data->function(config);
+            // A vendor scheduler or a cpuset change can move a worker even
+            // after the initial placement succeeded.  Check once per round so
+            // a migrated pair is reported as N/A instead of as a number from
+            // the wrong processor.  The check is outside the measurement loop.
+#if defined(_WIN32)
+            if (config->affinity_ok && config->use_affinity) {
+                const CpuSlot wanted = g_topology.slot(config->cpu_index);
+                PROCESSOR_NUMBER current = {};
+                GetCurrentProcessorNumberEx(&current);
+                if (current.Group != static_cast<WORD>(wanted.group) ||
+                    static_cast<int>(current.Number) != wanted.processor) {
+                    config->affinity_ok = false;
+                }
+            }
+#elif !defined(__APPLE__)
+            if (config->affinity_ok && config->use_affinity &&
+                sched_getcpu() != config->cpu_index) {
+                config->affinity_ok = false;
+            }
+#endif
             gate->round_done.fetch_add(1, std::memory_order_acq_rel);
         }
     }
@@ -1028,21 +1113,24 @@ void print_usage(const char* program) {
         "in cwd)\n"
         "  -y, --yes            Do not wait for Enter before/after the test\n"
         "      --no-progress    Disable the progress bar\n"
-        "      --no-affinity    Disable the best-effort affinity/QoS hint\n"
+        "      --no-affinity    Disable CPU pinning / affinity hints (results then\n"
+        "                       describe whichever cores the scheduler chose)\n"
         "      --list           Print CPU information and exit\n"
         "  -h, --help           Show this help\n"
         "      --version        Show version\n\n");
     std::printf("%s", "Notes:\n"
-        "  On Windows each worker is pinned to one logical processor with\n"
-        "  SetThreadAffinityMask and the placement is verified with\n"
-        "  GetCurrentProcessorNumber.  The matrix indices are logical processor\n"
-        "  numbers, not verified physical core IDs.\n"
+        "  On Windows each worker is assigned to one logical processor with\n"
+        "  SetThreadGroupAffinity and the actual (group, processor) placement is\n"
+        "  verified with GetCurrentProcessorNumberEx.  Machines with more than\n"
+        "  64 logical CPUs are covered through processor groups instead of\n"
+        "  wrapping at 64.  The matrix indices are flattened logical slots, not\n"
+        "  verified physical core IDs.\n"
+        "  A placement is re-checked after every round; if the scheduler moved a\n"
+        "  worker, that core pair is reported as N/A instead of as a number\n"
+        "  measured on the wrong processor.\n"
         "  For reproducible numbers, close other applications and use AC power.\n"
         "  Use x86 for 32-bit Windows, x64 for 64-bit Windows, and ARM64 for\n"
-        "  Windows on ARM.  The bundled .exe launcher selects the matching build.\n"
-        "  When a worker cannot be pinned to its requested processor, the\n"
-        "  affected cells are reported as N/A instead of as a number measured\n"
-        "  on the wrong core.\n");
+        "  Windows on ARM.  The bundled .exe launcher selects the matching build.\n");
 }
 
 bool stdout_is_tty() {
