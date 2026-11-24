@@ -872,22 +872,9 @@ Java_com_ddyibb_coherencylatency_NativeBench_runMatrix(JNIEnv* env, jclass,
         return 1;
     }
 
-    // Same symmetry as the CLI: average every pair with its transpose.
-    for (int row = 0; row < n; ++row) {
-        for (int column = row + 1; column < n; ++column) {
-            const std::size_t first = static_cast<std::size_t>(row) * n + column;
-            const std::size_t second = static_cast<std::size_t>(column) * n + row;
-            if (std::isnan(matrix[first]) || std::isnan(matrix[second])) {
-                // One direction failed to pin: the symmetric cell is N/A too.
-                matrix[first] = std::numeric_limits<float>::quiet_NaN();
-                matrix[second] = std::numeric_limits<float>::quiet_NaN();
-                continue;
-            }
-            const float average = (matrix[first] + matrix[second]) / 2.0f;
-            matrix[first] = average;
-            matrix[second] = average;
-        }
-    }
+    // No averaging and no mirroring: matrix[row * n + column] is the
+    // measurement of thread row signalling thread column, so the two directions
+    // of a pair stay independent (the matrix may legitimately be asymmetric).
 
     store_result(std::move(matrix), n);
     return 0;
