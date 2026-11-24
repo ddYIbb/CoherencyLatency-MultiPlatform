@@ -73,10 +73,13 @@ constexpr float kCellGap = 3.0f;
 constexpr float kCellMax = 40.0f;
 constexpr float kCellMin = 18.0f;
 constexpr float kCellMinHard = 5.0f;   // colour-map floor: no text at this size
-constexpr float kDefaultW = 600.0f;
-constexpr float kDefaultH = 880.0f;
-constexpr float kMinW = 520.0f;
-constexpr float kMinH = 760.0f;
+// Below this cell size the T0..T31 axis labels no longer fit without overlapping
+// each other, so the matrix is drawn as a bare colour map instead.
+constexpr float kAxisLabelMinCell = 12.0f;
+constexpr float kDefaultW = 560.0f;
+constexpr float kDefaultH = 640.0f;
+constexpr float kMinW = 440.0f;
+constexpr float kMinH = 520.0f;
 constexpr float kButtonH = 34.0f;
 constexpr float kStartW = 140.0f;
 constexpr float kStopW = 88.0f;
@@ -1373,9 +1376,12 @@ UiLayout ResolveGrid(UiLayout L) {
     const float childH = static_cast<float>(L.matrixClient.bottom - L.matrixClient.top);
     const float labelSample = std::max(TextWidth(g_fonts.label, L"T31"),
                                        TextWidth(g_fonts.label, L"T7*"));
-    const float labelWidth = std::max(std::ceil(labelSample) + Pxf(6.0f), Pxf(22.0f));
-    const float cellGap = Pxf(kCellGap);
-    const float headerH = std::max(Pxf(13.0f), LineHeight(g_fonts.label));
+    float labelWidth = std::max(std::ceil(labelSample) + Pxf(6.0f), Pxf(22.0f));
+    // Dense grids (n > 12) drop the number text, so the gap is only a hairline:
+    // keeping the 3 pt gap would eat 40 % of a 32-column grid and shrink every
+    // cell to 8 pt.
+    const float cellGap = Pxf(n > 12 ? 1.0f : kCellGap);
+    float headerH = std::max(Pxf(13.0f), LineHeight(g_fonts.label));
     const float nf = static_cast<float>(n);
     const float gaps = (nf - 1.0f) * cellGap;
     const float sbThickness = Pxf(kScrollBarW) + Pxf(4.0f);
@@ -1386,28 +1392,46 @@ UiLayout ResolveGrid(UiLayout L) {
     float gridW = 0.0f;
     float gridH = 0.0f;
     float natural = 0.0f;
+    float axisLabelWidth = labelWidth;
+    float axisHeaderHeight = headerH;
     // The matrix is a colour map: it must fit the card with no scrolling for any
     // realistic thread count, so the cell is simply the smaller of the two
     // "fit n cells" results and is only floored at the hard minimum (5 pt).
-    for (int pass = 0; pass < 3; ++pass) {
-        const float availW = childW - labelWidth - Pxf(4.0f) - reserveW;
-        const float availH = childH - headerH - reserveH;
-        const float byWidth = availW / nf - cellGap;
-        const float byHeight = availH / nf - cellGap;
-        natural = std::min(byWidth, byHeight);
-        cell = std::floor(ClampF(natural, Pxf(kCellMinHard), Pxf(kCellMax)));
-        gridW = nf * cell + gaps;
-        gridH = nf * cell + gaps;
-        const bool needY = gridH > (childH - headerH - reserveH) + 0.5f;
-        const bool needX = gridW > (childW - labelWidth - reserveW) + 0.5f;
-        const float wantW = needY ? sbThickness : 0.0f;
-        const float wantH = needX ? sbThickness : 0.0f;
-        if (wantW == reserveW && wantH == reserveH) {
-            break;
+    // A squeezed grid loses the T0..T31 axis labels completely: at 12 pt cells
+    // the labels overlap each other and eat 30 pt of a 520 pt wide grid, so the
+    // colour map is the only thing worth showing.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        reserveW = 0.0f;
+        reserveH = 0.0f;
+        for (int pass = 0; pass < 3; ++pass) {
+            const float availW = childW - axisLabelWidth - Pxf(4.0f) - reserveW;
+            const float availH = childH - axisHeaderHeight - reserveH;
+            const float byWidth = availW / nf - cellGap;
+            const float byHeight = availH / nf - cellGap;
+            natural = std::min(byWidth, byHeight);
+            cell = std::floor(ClampF(natural, Pxf(kCellMinHard), Pxf(kCellMax)));
+            gridW = nf * cell + gaps;
+            gridH = nf * cell + gaps;
+            const bool needY = gridH > (childH - axisHeaderHeight - reserveH) + 0.5f;
+            const bool needX = gridW > (childW - axisLabelWidth - reserveW) + 0.5f;
+            const float wantW = needY ? sbThickness : 0.0f;
+            const float wantH = needX ? sbThickness : 0.0f;
+            if (wantW == reserveW && wantH == reserveH) {
+                break;
+            }
+            reserveW = wantW;
+            reserveH = wantH;
         }
-        reserveW = wantW;
-        reserveH = wantH;
+        const bool tight = cell < Pxf(kAxisLabelMinCell);
+        if (attempt == 0 && tight && axisLabelWidth > 0.0f) {
+            axisLabelWidth = 0.0f;
+            axisHeaderHeight = 0.0f;
+            continue;
+        }
+        break;
     }
+    labelWidth = axisLabelWidth;
+    headerH = axisHeaderHeight;
 
     L.cell = cell;
     L.gap = cellGap;
@@ -2386,10 +2410,22 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     if (target.top < clipT && target.bottom > 0) {
         SaveDC(hdc);
         IntersectClipRect(hdc, clipL, 0, clipR, clipT);
+        // A 32-column grid has ~15 pt cells: "T31" is wider than that, so only
+        // every k-th header is drawn (k grows until the labels clear each other).
+        int headerEvery = 1;
+        {
+            const float need = TextWidth(gm.labelFont, L"T31");
+            while (headerEvery < n && static_cast<float>(headerEvery) * step < need + Pxf(6.0f)) {
+                ++headerEvery;
+            }
+        }
         for (int j = 0; j < n; ++j) {
             const float x = gridX + static_cast<float>(j) * step;
             if (x + cell < static_cast<float>(target.left) - 1.0f ||
                 x > static_cast<float>(target.right) + 1.0f) {
+                continue;
+            }
+            if (headerEvery > 1 && (j % headerEvery) != 0) {
                 continue;
             }
             const bool smt = gm.showStar && j < static_cast<int>(g_app.sibling.size()) &&
@@ -2662,6 +2698,7 @@ void StartRun(HWND hwnd) {
     config.threads = n;
     config.iterations = 1000000ull;
     config.runs = 3ull;
+
     config.owned = 0;
     config.use_affinity = 1;
 
@@ -2713,7 +2750,7 @@ void OnProgressMessage(const ProgressPayload* payload) {
     // thread pair -- there is no timer anywhere in this program.
     InvalidateStatus();
     InvalidateRect(g_app.progress, nullptr, FALSE);
-    if (cellUpdated && g_app.matrix != nullptr && g_app.haveLayout) {
+    if (cellUpdated && g_app.matrix != nullptr && g_app.haveLayout && false) {
         // Only the one heat cell that changed is damaged; PaintMatrix clips its
         // back-buffer drawing to this rectangle (macOS refreshPairRow parity).
         const GridMetrics gm = GridMetricsFromLayout(g_app.layout);
