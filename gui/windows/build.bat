@@ -38,7 +38,7 @@ if not exist "%VSDEV%" (
     exit /b 4
 )
 
-set "SUBSYSTEM=6.01"
+set "SUBSYSTEM=6.00"
 if /I "%ARCH%"=="arm64" set "SUBSYSTEM=6.02"
 
 call "%VSDEV%" -arch=%ARCH% -host_arch=x64 -no_logo
