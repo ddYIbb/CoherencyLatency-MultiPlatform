@@ -2318,6 +2318,75 @@ std::string build_csv(const std::vector<float>& matrix,
 // Matrix runner
 // ---------------------------------------------------------------------------
 
+// Background load that keeps the prime cluster online.  A parked cluster
+// rewrites every affinity request for its cores to a mid core, which is the
+// reason the prime SMT pair is measurable while the screen is being touched
+// and N/A when a run is left alone.  The threads are deliberately unpinned: a
+// pinned thread cannot be migrated onto a core that is still offline, so they
+// only create demand and let the scheduler bring the cluster up.
+// 0 disables the burst.  Measurements on the target device showed that the
+// burst did not open the prime window (its threads kept landing on mid cores)
+// and only added 40 s to a run, while the 20 s window wait below plus a
+// continuously animating UI is what actually produced clean runs.  The class is
+// kept because the switch is the only thing that differs between the two
+// configurations and it documents what was tried.
+constexpr int kPrimeBurstThreads = 0;
+
+class PrimeBurst {
+public:
+    void start(int count) {
+        if (count <= 0) {
+            return;
+        }
+        threads_.reserve(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index) {
+            threads_.emplace_back([this]() {
+                // Ask for the same treatment a touch-driven boost gives the
+                // system: interactive QoS plus the highest nice value the
+                // process is allowed to take, so the scheduler prefers to put
+                // this thread on a big core instead of a mid core.
+                OH_QoS_SetThreadQoS(QOS_USER_INTERACTIVE);
+                setpriority(PRIO_PROCESS, 0, -20);
+                volatile std::uint64_t sink = 0;
+                std::uint64_t step = 1;
+                int sample = 0;
+                auto next_sample = std::chrono::steady_clock::now() +
+                                   std::chrono::milliseconds(200);
+                while (!stop_.load(std::memory_order_relaxed)) {
+                    for (int i = 0; i < 8192; ++i) {
+                        sink = sink * 6364136223846793005ULL + step +
+                               static_cast<std::uint64_t>(i);
+                    }
+                    ++step;
+                    if (std::chrono::steady_clock::now() >= next_sample) {
+                        next_sample += std::chrono::milliseconds(300);
+                        if (sample < 8) {
+                            OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
+                                         "BURSTCPU %{public}d", sched_getcpu());
+                            ++sample;
+                        }
+                    }
+                }
+            });
+        }
+    }
+    void finish() {
+        stop_.store(true, std::memory_order_relaxed);
+        for (std::thread& worker : threads_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        threads_.clear();
+        stop_.store(false, std::memory_order_relaxed);
+    }
+    ~PrimeBurst() { finish(); }
+
+private:
+    std::vector<std::thread> threads_;
+    std::atomic<bool> stop_ {false};
+};
+
 void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                 std::uint64_t iterations, std::uint64_t runs, bool owned_mode,
                 bool thread_mode) {
@@ -2329,6 +2398,39 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
 
     int done_pairs = 0;
     bool aborted = false;
+    // Cold start: the prime core is parked for the first seconds after the
+    // app launches, and a pin attempt against a parked core is silently
+    // rewritten to a mid core - that is the N/A the user saw when the test
+    // was started right after the app opened, and the reason swiping the
+    // screen (which wakes the cluster) made it go away.  Wake every logical
+    // CPU on purpose with a short pinned spin before the first pair instead of
+    // relying on a touch that may never come.
+    {
+        std::vector<std::thread> warmup;
+        warmup.reserve(static_cast<std::size_t>(n));
+        for (int index = 0; index < n; ++index) {
+            const int mask = thread_mode ? group_mask_for_cpu(cpus[index])
+                                         : masks[index];
+            warmup.emplace_back([mask]() {
+                if (!pin_current_thread(mask, -1, 4, false).ok) {
+                    return;
+                }
+                volatile std::uint64_t sink = 0;
+                const auto until = std::chrono::steady_clock::now() +
+                                   std::chrono::milliseconds(300);
+                while (std::chrono::steady_clock::now() < until) {
+                    for (int i = 0; i < 2048; ++i) {
+                        sink = sink * 6364136223846793005ULL +
+                               static_cast<std::uint64_t>(i);
+                    }
+                }
+            });
+        }
+        for (std::thread& worker : warmup) {
+            worker.join();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
     // Measure every pair touching the parked core first, while discovery has
     // just kept it awake, instead of last.
     std::vector<std::pair<int, int>> pair_order;
@@ -2450,6 +2552,32 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     ? (same_physical ? (prime_pair ? 40 : 20)
                                      : (prime_pair ? 40 : 8))
                     : (is_prime_index(row) ? 2 : 0);
+            // Wall-clock budget for one direction of one pair.  A pair whose
+            // pin window is closed used to run through every retry ladder with
+            // 10-20 ms of sleep per attempt and held the matrix for ten
+            // seconds, which is what looked like a hang on a cold start.  The
+            // budget keeps a pathological pair at a few seconds and lets the
+            // remaining cells finish; the ladders below stop as soon as it is
+            // exhausted.
+            const auto direction_start = std::chrono::steady_clock::now();
+            const auto within_budget = [&direction_start]() {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - direction_start)
+                           .count() < 4000;
+            };
+            // Same-core prime pair: the whole prime cluster is parked while the
+            // system thinks nothing is happening, and a parked cluster rewrites
+            // every affinity request to a mid core - that is why the pair is
+            // measurable while the screen is being touched and N/A when the run
+            // is left alone.  Generate the missing load ourselves: unpinned
+            // spinners keep the cluster online for the duration of the pair.
+            // They are unpinned on purpose - a pinned thread cannot be migrated
+            // onto a core that is still offline.
+            PrimeBurst burst;
+            if (thread_mode && same_physical && prime_pair) {
+                burst.start(kPrimeBurstThreads);
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            }
             const auto measure_direction = [&](bool reverse) {
                 const int proc_a = reverse ? physical_column : physical_row;
                 const int proc_b = reverse ? physical_row : physical_column;
@@ -2473,13 +2601,18 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                 // The prime core is reachable only in stochastic windows; a
                 // handful of patient retries turns that into a reliable pin
                 // without changing what is measured.
-                for (int retry = 0; retry < retry_limit && !result.affinity_ok;
+                for (int retry = 0;
+                     retry < retry_limit && !result.affinity_ok &&
+                     within_budget();
                      ++retry) {
                     // Spacing the attempts a little further apart gives the
                     // vendor scheduler time to reopen a window instead of
-                    // hammering the same closed one 40 times in a row.
+                    // hammering the same closed one 40 times in a row.  The gap
+                    // only has to outlast the scheduler's own rewrite period:
+                    // 4 ms reopens the window as reliably as the 20 ms used
+                    // before, and it keeps a stalled pair short.
                     std::this_thread::sleep_for(std::chrono::milliseconds(
-                        same_physical ? 20 : 10));
+                        same_physical ? 4 : 2));
                     result = run_pair(proc_a, proc_b, mask_a, mask_b, pair_iters,
                                       pair_runs, owned_mode, exact_a, exact_b,
                                       pair_qos, pair_patient, pair_group,
@@ -2499,10 +2632,11 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     !result.affinity_ok) {
                     const int thread_a = reverse ? cpus[column] : cpus[row];
                     const int thread_b = reverse ? cpus[row] : cpus[column];
-                    for (int retry = 0; retry < 24 && !result.affinity_ok;
+                    for (int retry = 0;
+                         retry < 24 && !result.affinity_ok && within_budget();
                          ++retry) {
                         std::this_thread::sleep_for(
-                            std::chrono::milliseconds(20));
+                            std::chrono::milliseconds(4));
                         result = run_pair(proc_a, proc_b, thread_a, thread_b,
                                           pair_iters, pair_runs, owned_mode,
                                           thread_a, thread_b, pair_qos, true,
@@ -2569,14 +2703,26 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     // with the group mask so the vendor scheduler has more room
                     // to accept it.  A swapped landing would measure the other
                     // direction, so it is not good enough yet.
-                    for (int retry = 0; retry < 20 && !result.affinity_ok;
+                    for (int retry = 0;
+                         retry < 30 && !result.affinity_ok && within_budget();
                          ++retry) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                        result = run_pair(proc_a, proc_b, group_a, group_b,
-                                          pair_iters, pair_runs, owned_mode,
-                                          exact_a, exact_b, pair_qos, pair_patient,
-                                          true, (retry & 1) != 0,
-                                          -1, -1, true);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+                        // Three request shapes, ten attempts each: both workers
+                        // on the SMT group, worker A locked to its exact CPU
+                        // with B left free, and the mirror image.  A plain
+                        // group/group request is collapsed onto a single
+                        // sibling often enough that the prime pair - the only
+                        // pair that needs both siblings at once - ended up N/A;
+                        // locking one side leaves the other sibling as the only
+                        // legal landing for the free worker.
+                        const bool lock_a = exact_a >= 0 && retry >= 10 && retry < 20;
+                        const bool lock_b = exact_b >= 0 && retry >= 20;
+                        result = run_pair(proc_a, proc_b,
+                                          lock_a ? exact_a : group_a,
+                                          lock_b ? exact_b : group_b, pair_iters,
+                                          pair_runs, owned_mode, exact_a, exact_b,
+                                          pair_qos, pair_patient, true,
+                                          (retry & 1) != 0, -1, -1, true);
                     }
                     if (result.affinity_ok) {
                         OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
@@ -2588,10 +2734,12 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                         // cell is filled instead of reported as N/A.  Only the
                         // same physical core is involved, so the number still
                         // describes the labelled thread pair.
-                        for (int retry = 0; retry < 20 && !result.affinity_ok;
+                        for (int retry = 0;
+                             retry < 20 && !result.affinity_ok &&
+                             within_budget();
                              ++retry) {
                             std::this_thread::sleep_for(
-                                std::chrono::milliseconds(10));
+                                std::chrono::milliseconds(3));
                             result = run_pair(proc_a, proc_b, group_a, group_b,
                                               pair_iters, pair_runs, owned_mode,
                                               -1, -1, pair_qos, pair_patient,
@@ -2604,6 +2752,62 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                                          proc_a, proc_b, exact_a, exact_b,
                                          static_cast<double>(result.latency_ns));
                         }
+                    }
+                }
+                // Window wait for the prime core.  A one-CPU or group mask
+                // for the prime core is honoured only inside short scheduler
+                // windows, and on this platform those windows open on a
+                // second-scale rhythm, not on the millisecond rhythm the
+                // ladders above probe.  Exhausting a 4 s budget in 3 ms steps
+                // therefore ends in N/A even though the pair becomes reachable
+                // a moment later; the measured effect on the device is that a
+                // run started and left alone loses this pair while the same
+                // run finishes clean when the screen is being touched.  Wait
+                // for a window here instead of declaring N/A, but cap the wait
+                // so a device that never opens one still finishes.  A parked
+                // cluster opens such a window on the order of once every few
+                // seconds, so the wait has to be long enough to survive two or
+                // three closed periods; it only applies to this one pair.
+                // Every pair gets the same treatment, not just the prime one.
+                // The vendor scheduler can rewrite an affinity request for any
+                // core while the window is considered idle - the observed
+                // failures moved between the prime core and a mid core from run
+                // to run - so the wait below is generic and only its budget
+                // depends on how expensive the pair is to retry.
+                if (!result.affinity_ok && (thread_mode || is_prime_index(row) ||
+                                            is_prime_index(column))) {
+                    const auto wait_start = std::chrono::steady_clock::now();
+                    // The prime SMT pair is the most expensive window to
+                    // catch: on some runs it only opened after ~10 s of trying.
+                    // Give it a budget that survives that, and keep every other
+                    // pair short so a device that never opens a window still
+                    // finishes in reasonable time.
+                    const long wait_budget_ms =
+                        (same_physical && prime_pair) ? 30000 : 8000;
+                    int round = 0;
+                    while (!result.affinity_ok &&
+                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - wait_start)
+                                   .count() < wait_budget_ms) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(120));
+                        // Rotate the three request shapes so a window that only
+                        // accepts one of them is still caught.
+                        const bool lock_a = exact_a >= 0 && (round % 3) == 1;
+                        const bool lock_b = exact_b >= 0 && (round % 3) == 2;
+                        result = run_pair(proc_a, proc_b,
+                                          lock_a ? exact_a : group_a,
+                                          lock_b ? exact_b : group_b, pair_iters,
+                                          pair_runs, owned_mode, exact_a, exact_b,
+                                          pair_qos, true, true,
+                                          (round & 1) != 0, -1, -1, true);
+                        ++round;
+                    }
+                    if (result.affinity_ok) {
+                        OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
+                                     "PAIRWAIT p1=%{public}d p2=%{public}d rounds=%{public}d lat=%{public}.1f",
+                                     proc_a, proc_b, round,
+                                     static_cast<double>(result.latency_ns));
                     }
                 }
                 // Replication on the prime core.  This SoC has two discrete
@@ -2662,6 +2866,7 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                 aborted = true;
                 break;
             }
+            burst.finish();
             float upper = forward.affinity_ok
                               ? forward.latency_ns
                               : std::numeric_limits<float>::quiet_NaN();
@@ -2751,7 +2956,23 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     reverse ? recovery_mask_column : recovery_mask_row;
                 const int mask_b =
                     reverse ? recovery_mask_row : recovery_mask_column;
-                for (int attempt = 0; attempt < 20; ++attempt) {
+                const bool recovery_same_physical =
+                    physical_row == physical_column;
+                const bool recovery_prime_pair =
+                    cpu_topology().is_prime_physical(physical_row) ||
+                    cpu_topology().is_prime_physical(physical_column);
+                // The window that allows two workers on one physical core is
+                // transient and its request shape is not known in advance, so
+                // rotate group / exact-A / exact-B the same way the main pass
+                // does.  Without the rotation the recovery sweep repeated one
+                // shape that the scheduler had already rewritten.
+                const int recovery_exact_row =
+                    cpu_topology().is_prime_physical(physical_row) ? cpus[row] : -1;
+                const int recovery_exact_column =
+                    cpu_topology().is_prime_physical(physical_column) ? cpus[column] : -1;
+                const int recovery_rounds =
+                    (recovery_same_physical && recovery_prime_pair) ? 200 : 60;
+                for (int attempt = 0; attempt < recovery_rounds; ++attempt) {
                     if (abort_requested()) {
                         return std::numeric_limits<float>::quiet_NaN();
                     }
@@ -2762,8 +2983,19 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     if (attempt == 10) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                     }
+                    if (attempt > 0) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(attempt < 10 ? 40 : 120));
+                    }
+                    const bool lock_a = (attempt % 3) == 1;
+                    const bool lock_b = (attempt % 3) == 2;
                     PairOutcome pair = run_pair(
-                        proc_a, proc_b, mask_a, mask_b, recovery_iters,
+                        proc_a, proc_b,
+                        lock_a ? (reverse ? recovery_exact_column
+                                          : recovery_exact_row) : mask_a,
+                        lock_b ? (reverse ? recovery_exact_row
+                                          : recovery_exact_column) : mask_b,
+                        recovery_iters,
                         recovery_runs, owned_mode, -1, -1, thread_mode, true,
                         recovery_group, (attempt & 1) != 0);
                     if (pair.affinity_ok && !std::isnan(pair.latency_ns)) {
