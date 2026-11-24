@@ -1128,19 +1128,9 @@ MatrixResult run_matrix(const Options& options, int n) {
         std::fputc('\n', stdout);
     }
 
-    // Same symmetry as the original: average each off-diagonal pair with its
-    // transpose.  The diagonal is already zero.  A NaN (unpinned) cell keeps
-    // both directions N/A, because averaging with NaN yields NaN.
-    for (int i = 0; i < n; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            const float average =
-                (result.filtered[matrix_index(n, i, j)] +
-                 result.filtered[matrix_index(n, j, i)]) /
-                2.0f;
-            result.filtered[matrix_index(n, i, j)] = average;
-            result.filtered[matrix_index(n, j, i)] = average;
-        }
-    }
+    // Cell [i][j] holds the measurement of thread i signalling thread j, so the
+    // two directions of a pair are reported separately: the matrix and the CSV
+    // may legitimately be asymmetric.  The diagonal stays zero.
 
     result.unpinned_pairs = unpinned_pairs;
     return result;
