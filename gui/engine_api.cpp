@@ -273,27 +273,10 @@ int cl_run_matrix(const ClRunConfig* config, ClProgressFn progress,
             aborted = 1;
         }
 
-        // Same symmetry as the CLI: average every pair with its transpose, so
-        // a finished matrix is identical to the command line result.
-        // A stopped run keeps what it already measured: when only one direction
-        // of a pair was measured that single value is mirrored, which is what
-        // the Android and HarmonyOS front ends show after "stop".
-        for (int i = 0; i < n; ++i) {
-            for (int j = i + 1; j < n; ++j) {
-                const float a = cells[matrix_index(n, i, j)];
-                const float b = cells[matrix_index(n, j, i)];
-                float average = std::numeric_limits<float>::quiet_NaN();
-                if (a == a && b == b) {
-                    average = (a + b) / 2.0f;
-                } else if (a == a) {
-                    average = a;
-                } else if (b == b) {
-                    average = b;
-                }
-                cells[matrix_index(n, i, j)] = average;
-                cells[matrix_index(n, j, i)] = average;
-            }
-        }
+        // No averaging and no mirroring: cell [i][j] is the measurement of
+        // thread i signalling thread j.  A stopped run simply keeps the cells it
+        // already measured and leaves the rest N/A, which is what the Android
+        // and HarmonyOS front ends show after "stop".
 
         out->n = n;
         out->unpinned_pairs = unpinned_pairs;
