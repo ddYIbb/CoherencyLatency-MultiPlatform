@@ -1,26 +1,23 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>CoherencyLatency 鸿蒙版 使用手册</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoherencyLatency 图形界面版使用说明</title>
 <style>
-  body { font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; max-width: 860px; margin: 0 auto; padding: 34px 28px 80px; line-height: 1.75; color: #1f2328; }
-  h1 { font-size: 1.9em; border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
-  h2 { margin-top: 1.8em; border-bottom: 1px solid #d8dee4; padding-bottom: .25em; }
-  code { background: #f1f3f5; border-radius: 4px; padding: .12em .3em; font-family: Consolas, "Liberation Mono", monospace; font-size: .9em; }
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 34px 28px 80px; line-height: 1.75; color: #1f2328; }
+  h1 { font-size: 2em; border-bottom: 2px solid #d0d7de; padding-bottom: .3em; }
+  h2 { margin-top: 2em; border-bottom: 1px solid #d8dee4; padding-bottom: .25em; }
+  h3 { margin-top: 1.4em; }
+  code { background: #f1f3f5; border-radius: 4px; padding: .12em .3em; font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; }
   pre { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 6px; padding: 14px 16px; overflow: auto; line-height: 1.45; }
   pre code { background: none; padding: 0; }
   blockquote { margin: 1em 0; padding: .7em 1em; border-left: 4px solid #d97706; background: #fff8eb; color: #5f3b00; }
   table { border-collapse: collapse; width: 100%; margin: 1em 0; }
   th, td { border: 1px solid #d8dee4; padding: 8px 10px; text-align: left; vertical-align: top; }
   th { background: #f6f8fa; }
-  img { max-width: 100%; height: auto; border: 1px solid #d8dee4; border-radius: 6px; }
-  .figure { text-align: center; }
   a { color: #0969da; }
-  @media print { body { max-width: none; padding: 0; margin: 16mm 14mm; } a { color: #000; text-decoration: none; } pre, blockquote, table, .figure { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } }
-</style>
-</head>
-<body>
+  img { max-width: 100%; border: 1px solid #d8dee4; border-radius: 6px; }
+  @media print { body { max-width: none; padding: 0; margin: 18mm; } a { color: #000; text-decoration: none; } pre, blockquote, table { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } }
+</style></head><body>
 <h1>Windows / macOS 图形界面版使用说明</h1>
 <p>CoherencyLatency 1.2.0 桌面图形界面版。与命令行版共用同一套测量引擎（<code>windows/src/CoherencyLatency.cpp</code>），因此矩阵数值、CSV 格式与命令行版完全一致。</p>
 <h2>一、Windows 版</h2>
@@ -28,8 +25,8 @@
 <p>Release 里的 <code>CoherencyLatency-Windows-GUI-v1.2.0.zip</code> 解压后只有一个 <code>CoherencyLatency.exe</code>，这是<strong>单文件</strong>程序，双击即可运行，不需要安装、不写注册表、不需要 Visual C++ 运行库。</p>
 <p>它内部同时带有 x86、x64、ARM64 三份原生程序：启动时按当前系统自动挑一个释放到 <code>%TEMP%</code> 再运行，退出后删除临时文件。首次启动时 Windows Defender 可能扫描几秒到几十秒，属正常现象。</p>
 <h3>界面</h3>
-<p>按 Windows 11 Fluent 风格绘制，跟随系统深色/浅色模式与强调色：</p>
-<ul><li><strong>设备信息</strong>：逻辑线程数、缓存行大小、架构；物理核数与同核超线程分组；测量对象说明；固定参数；版本号。</li><li><strong>测量范围</strong>：自动测量本机全部逻辑线程，没有线程数选项；线程越多对数越多（<code>n×(n-1)</code>），耗时相应增加。</li><li><strong>开始测试 (Alt+S)</strong>：跑完整的 n×n 矩阵。</li><li><strong>停止 (Alt+T 或 Esc)</strong>：请求中止，当前线程对跑完后停下，已完成结果保留。</li><li><strong>导出 CSV (Alt+E)</strong>：另存一次结果。</li><li><strong>状态行</strong>：<code>就绪</code> / <code>测量中 x/y · T2↔T5 113.5 ns · 用时 3.2 s</code> / <code>完成 · 56 个线程对 · 用时 12.4 s</code> / <code>已停止 · 完成 6/56 个线程对 · 用时 2.1 s</code>。<strong>只在每个线程对完成时刷新一次</strong>，不会高频跳动；某一对绑核失败时显示 <code>T2↔T5 N/A</code>，不带单位。</li><li><strong>矩阵卡</strong>：默认竖向 600×880 的紧凑窗口，矩阵占满剩余空间。线程数超过 12 时矩阵只画色块（不写数字，数值看导出的 CSV），格子自动缩小，32×32 也能整幅放下，不需要滚动。</li><li><strong>矩阵</strong>：热力着色，对角线为 <code>x</code>，未测为 <code>·</code>，完成填数值（单位 ns/op）。带 <code>*</code> 的线程互为同核超线程，这些格子通常明显更快（约 30 ns）。</li><li><strong>自动保存</strong>：每次跑完自动把 CSV 写到 <code>%USERPROFILE%\Documents\CoherencyLatency</code>，文件名 <code>core_latencies_&lt;日期&gt;_&lt;时间&gt;.csv</code>，底栏会显示实际目录。</li></ul>
+<p>按 Windows 11 Fluent 风格绘制，跟随系统深色/浅色模式、强调色与高对比度：</p>
+<ul><li><strong>设备信息</strong>：逻辑线程数、缓存行大小、架构；物理核数与同核超线程分组；测量对象说明；固定参数；版本号。</li><li><strong>测量范围</strong>：自动测量本机全部逻辑线程，没有线程数选项；线程越多对数越多（<code>n×(n-1)</code>），耗时相应增加。</li><li><strong>开始测试 (Alt+S)</strong>：跑完整的 n×n 矩阵。</li><li><strong>停止 (Alt+T 或 Esc)</strong>：请求中止，当前线程对跑完后停下，已完成结果保留。</li><li><strong>导出 CSV (Alt+E)</strong>：另存一次结果。</li><li><strong>状态行</strong>：<code>就绪</code> / <code>测量中 x/y · T2↔T5 113.5 ns · 用时 3.2 s</code> / <code>完成 · 56 个线程对 · 用时 12.4 s</code> / <code>已停止 · 完成 6/56 个线程对 · 用时 2.1 s</code>。<strong>只在每个线程对完成时刷新一次</strong>，不会高频跳动；某一对绑核失败时显示 <code>T2↔T5 N/A</code>，不带单位。</li><li><strong>矩阵</strong>：热力着色，对角线为 <code>x</code>，未测为 <code>·</code>，完成填数值（单位 ns/op）。带 <code>*</code> 的线程互为同核超线程，这些格子通常明显更快（约 30 ns）。</li><li><strong>矩阵卡</strong>：默认竖向 600×880 的紧凑窗口，矩阵占满剩余空间。线程数超过 12 时矩阵只画色块（不写数字，数值看导出的 CSV），格子自动缩小，32×32 也能整幅放下，不需要滚动。</li><li><strong>自动保存</strong>：每次跑完自动把 CSV 写到 <code>%USERPROFILE%\Documents\CoherencyLatency</code>，文件名 <code>core_latencies_&lt;日期&gt;_&lt;时间&gt;.csv</code>，底栏会显示实际目录。</li></ul>
 <h3>快捷键</h3>
 <table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody>
 <tr><td><code>Alt+S</code></td><td>开始测试</td></tr>
@@ -46,13 +43,13 @@
 <pre><code>xattr -dr com.apple.quarantine CoherencyLatency.app</code></pre>
 <ul><li><code>CoherencyLatency.app</code> 同时包含 Intel（x86_64，最低 macOS 10.13）和 Apple Silicon（arm64，最低 macOS 11.0）两个切片，不需要选版本。</li></ul>
 <h3>界面</h3>
-<p>按 macOS 原生 AppKit 风格绘制，自动跟随系统深色/浅色模式、强调色和辅助功能字号：</p>
+<p>按 macOS 原生 AppKit 风格绘制，自动跟随系统深色/浅色模式、强调色和增强对比度（辅助功能）：</p>
 <ul><li>与 Windows 版同样的信息骨架：设备信息、开始/停止/导出、状态行、进度条、热力矩阵、图例与平均/最小/最大值、自动保存路径；同样没有线程数选项，固定测量全部逻辑线程。</li><li>状态行同样<strong>只在每个线程对完成时刷新一次</strong>。</li><li>热力色公式两端完全一致，同一个矩阵在 Windows 和 macOS 上颜色相同。</li></ul>
 <h3>菜单与快捷键</h3>
 <table><thead><tr><th>菜单项</th><th>快捷键</th><th>功能</th></tr></thead><tbody>
-<tr><td>文件 → 开始测试</td><td><code>⌘R</code></td><td>开始测试</td></tr>
-<tr><td>文件 → 停止</td><td><code>⌘.</code></td><td>停止</td></tr>
-<tr><td>文件 → 导出 CSV…</td><td><code>⌘S</code></td><td>另存结果</td></tr>
+<tr><td>测试 → 开始测试</td><td><code>⌘R</code></td><td>开始测试</td></tr>
+<tr><td>测试 → 停止</td><td><code>⌘.</code></td><td>停止</td></tr>
+<tr><td>测试 → 导出 CSV</td><td><code>⌘S</code></td><td>另存结果</td></tr>
 <tr><td>窗口 → 最小化</td><td><code>⌘M</code></td><td>最小化</td></tr>
 <tr><td>应用 → 退出</td><td><code>⌘Q</code></td><td>退出（运行中会先中止并等待线程结束）</td></tr>
 </tbody></table>
@@ -72,5 +69,4 @@
 <p><strong>Q：为什么线程数越多，用时增长很快？</strong> 线程对数是 <code>n × (n - 1)</code>，8 线程 56 对，16 线程 240 对，32 线程 992 对。默认每对 1,000,000 次原子操作 × 3 轮。</p>
 <p><strong>Q：能不能只测某几个核？</strong> 图形界面版固定测量全部逻辑线程，不提供选择；要精确指定核心请用命令行版的 <code>--cpus</code> 或直接改源码。</p>
 <p><strong>Q：结果文件在哪？</strong> Windows 是 <code>%USERPROFILE%\Documents\CoherencyLatency</code>，macOS 是 <code>~/Documents/CoherencyLatency</code>，底栏会显示完整路径；也可以用「导出 CSV」另存。</p>
-</body>
-</html>
+</body></html>
