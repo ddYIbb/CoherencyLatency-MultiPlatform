@@ -1,4 +1,5 @@
 import { pasteboard } from '@kit.BasicServicesKit';
+import { window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -76,6 +77,23 @@ struct Index {
     this.readDevice();
     this.versionText = benchVersion();
     this.applySystemTheme();
+    // A 9x9 run takes tens of seconds and a 20x20 run takes minutes.  If the
+    // display sleeps mid-run the platform parks cores and rewrites thread
+    // placement, which is exactly when pins start failing and cells turn into
+    // N/A.  Keeping the screen on for the lifetime of this page removes that
+    // failure mode without asking the user to keep swiping.
+    this.setKeepScreenOn(true);
+  }
+
+  private setKeepScreenOn(keep: boolean): void {
+    try {
+      window.getLastWindow(getContext(this)).then((win: window.Window) => {
+        win.setWindowKeepScreenOn(keep).catch(() => {
+        });
+      }).catch(() => {
+      });
+    } catch (error) {
+    }
   }
 
   onPageShow(): void {
@@ -94,6 +112,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.setKeepScreenOn(false);
     this.stopTimer();
     if (this.running) {
       benchAbort();
@@ -991,12 +1010,26 @@ struct Index {
         .width('100%')
         .margin({ top: 16 })
 
-        Progress({ value: this.donePairs, total: Math.max(1, this.totalPairs), type: ProgressType.Linear })
-          .color(this.accentColor())
-          .backgroundColor(this.lineColor())
-          .height(6)
-          .width('100%')
-          .margin({ top: 18 })
+        Stack({ alignContent: Alignment.Start }) {
+          Progress({ value: this.donePairs, total: Math.max(1, this.totalPairs), type: ProgressType.Linear })
+            .color(this.accentColor())
+            .backgroundColor(this.lineColor())
+            .height(6)
+            .width('100%')
+          if (this.running) {
+            // 测试进行中保持界面持续出帧。部分设备的电源/调度策略会把长时间
+            // 静止的窗口当成空闲，并在此时收紧绑核窗口；让这一层动画常驻并
+            // 真正绘制（尺寸为 0 时会被裁掉、不再产帧），界面就不会进入那种
+            // 状态，用户不必靠手指滑动来维持。
+            LoadingProgress()
+              .width(3)
+              .height(3)
+              .opacity(0.01)
+          }
+        }
+        .height(6)
+        .width('100%')
+        .margin({ top: 18 })
 
         Text(this.statusText)
           .fontSize(12.5)
