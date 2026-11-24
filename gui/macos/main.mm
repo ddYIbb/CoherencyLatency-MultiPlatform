@@ -228,6 +228,99 @@ static std::map<long long, NSFont*>* CLFontCache(void) {
     return gCLFontCache;
 }
 
+// NSLog-style weight-aware class methods (systemFontOfSize:weight:,
+// monospacedDigitSystemFontOfSize:weight:) and the NSFontWeight constants are
+// macOS 10.11+.  The 10.10 slice reproduces the same hierarchy through the
+// pre-10.11 API: probe the selector, otherwise fall back to the plain system
+// font and let NSFontManager synthesise the bold trait.
+typedef NSFont* (*CLWeightedFontFn)(id, SEL, CGFloat, CGFloat);
+
+static NSFont* CLWeightedFont(NSString* selectorName, CGFloat size, CGFloat weight,
+                              NSFont* fallback) {
+    const SEL selector = NSSelectorFromString(selectorName);
+    if (selectorName != nil && [NSFont respondsToSelector:selector]) {
+        CLWeightedFontFn make = (CLWeightedFontFn)(void*)objc_msgSend;
+        NSFont* font = make((id)[NSFont class], selector, size, weight);
+        if (font != nil) {
+            return font;
+        }
+    }
+    return fallback;
+}
+
+static NSFont* CLSystemFont(CGFloat size) {
+    return CLWeightedFont(@"systemFontOfSize:weight:", size, 0.0,
+                          [NSFont systemFontOfSize:size]);
+}
+
+static NSFont* CLSystemBoldFont(CGFloat size) {
+    NSFont* plain = CLSystemFont(size);
+    if (plain == nil) {
+        return nil;
+    }
+    const SEL selector = NSSelectorFromString(@"systemFontOfSize:weight:");
+    if ([NSFont respondsToSelector:selector]) {
+        return CLWeightedFont(@"systemFontOfSize:weight:", size, 0.4, plain);
+    }
+    NSFontManager* manager = [NSFontManager sharedFontManager];
+    return (manager != nil) ? [manager convertFont:plain toHaveTrait:NSBoldFontMask]
+                            : plain;
+}
+
+static NSFont* CLSystemSemiboldFont(CGFloat size) {
+    NSFont* plain = CLSystemFont(size);
+    if (plain == nil) {
+        return nil;
+    }
+    const SEL selector = NSSelectorFromString(@"systemFontOfSize:weight:");
+    if ([NSFont respondsToSelector:selector]) {
+        return CLWeightedFont(@"systemFontOfSize:weight:", size, 0.3, plain);
+    }
+    NSFontManager* manager = [NSFontManager sharedFontManager];
+    return (manager != nil) ? [manager convertFont:plain toHaveTrait:NSBoldFontMask]
+                            : plain;
+}
+
+static NSFont* CLMonospacedFont(CGFloat size) {
+    NSFont* fallback = [NSFont fontWithName:@"Menlo" size:size];
+    if (fallback == nil) {
+        fallback = [NSFont systemFontOfSize:size];
+    }
+    return CLWeightedFont(@"monospacedDigitSystemFontOfSize:weight:", size, 0.0,
+                          fallback);
+}
+
+static NSFont* CLMonospacedBoldFont(CGFloat size) {
+    NSFont* plain = CLMonospacedFont(size);
+    if (plain == nil) {
+        return nil;
+    }
+    const SEL selector = NSSelectorFromString(@"monospacedDigitSystemFontOfSize:weight:");
+    if ([NSFont respondsToSelector:selector]) {
+        return CLWeightedFont(@"monospacedDigitSystemFontOfSize:weight:", size, 0.4,
+                              plain);
+    }
+    NSFontManager* manager = [NSFontManager sharedFontManager];
+    return (manager != nil) ? [manager convertFont:plain toHaveTrait:NSBoldFontMask]
+                            : plain;
+}
+
+// NSControl.maximumNumberOfLines is macOS 10.11+.  On older systems the field
+// keeps its historical single-line behaviour, which is exactly what the design
+// wants, so the setter is probed and skipped.
+static void CLMakeSingleLine(NSTextField* field) {
+    if (field == nil) {
+        return;
+    }
+    const SEL selector = NSSelectorFromString(@"setMaximumNumberOfLines:");
+    if (![field respondsToSelector:selector]) {
+        return;
+    }
+    typedef void (*CLIntSetter)(id, SEL, NSInteger);
+    CLIntSetter setter = (CLIntSetter)(void*)objc_msgSend;
+    setter(field, selector, 1);
+}
+
 static NSFont* CLCachedFont(CLFontKind kind, CGFloat size) {
     const long long key =
         static_cast<long long>(kind) * 1000000LL +
@@ -240,27 +333,40 @@ static NSFont* CLCachedFont(CLFontKind kind, CGFloat size) {
     NSFont* font = nil;
     switch (kind) {
         case CLFontKindRegular:
-            font = [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
+            font = CLSystemFont(size);
             break;
         case CLFontKindSemibold:
-            font = [NSFont systemFontOfSize:size weight:NSFontWeightSemibold];
+            font = CLSystemSemiboldFont(size);
             break;
         case CLFontKindBold:
-            font = [NSFont systemFontOfSize:size weight:NSFontWeightBold];
+            font = CLSystemBoldFont(size);
             break;
         case CLFontKindDigit:
-            font = [NSFont monospacedDigitSystemFontOfSize:size
-                                                    weight:NSFontWeightRegular];
+            font = CLMonospacedFont(size);
             break;
         case CLFontKindDigitBold:
-            font = [NSFont monospacedDigitSystemFontOfSize:size
-                                                    weight:NSFontWeightBold];
+            font = CLMonospacedBoldFont(size);
             break;
     }
     if (font != nil) {
         cache->emplace(key, font);
     }
     return font;
+}
+
+// NSButton.bezelColor is macOS 10.12.2+; probe the setter so the 10.10 slice
+// simply keeps the stock button rendering.
+static void CLSetBezelColour(NSButton* button, NSColor* colour) {
+    if (button == nil || colour == nil) {
+        return;
+    }
+    const SEL selector = NSSelectorFromString(@"setBezelColor:");
+    if (![button respondsToSelector:selector]) {
+        return;
+    }
+    typedef void (*CLColourSetter)(id, SEL, NSColor*);
+    CLColourSetter setter = (CLColourSetter)(void*)objc_msgSend;
+    setter(button, selector, colour);
 }
 
 static NSFont* CLUIFont(CGFloat size) {
@@ -1099,7 +1205,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     label.editable = NO;
     label.selectable = NO;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
-    label.maximumNumberOfLines = 1;
+    CLMakeSingleLine(label);
     label.usesSingleLineMode = YES;
     label.alignment = NSTextAlignmentLeft;
     [self addSubview:label];
@@ -1141,7 +1247,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     _deviceTitleLabel.drawsBackground = NO;
     _deviceTitleLabel.editable = NO;
     _deviceTitleLabel.selectable = NO;
-    _deviceTitleLabel.maximumNumberOfLines = 1;
+    CLMakeSingleLine(_deviceTitleLabel);
     _deviceTitleLabel.usesSingleLineMode = YES;
     [_deviceCard addSubview:_deviceTitleLabel];
 
@@ -1156,7 +1262,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
         label.editable = NO;
         label.selectable = NO;
         label.lineBreakMode = NSLineBreakByClipping;
-        label.maximumNumberOfLines = 1;
+        CLMakeSingleLine(label);
         label.usesSingleLineMode = YES;
         label.hidden = YES;
         [_deviceCard addSubview:label];
@@ -1177,7 +1283,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     // macOS: the prominent action is tinted with the user's accent colour and
     // AppKit picks a contrasting title colour.
     if ([_startButton respondsToSelector:@selector(setBezelColor:)]) {
-        _startButton.bezelColor = CLAccentColour();
+        CLSetBezelColour(_startButton, CLAccentColour());
     }
     [_stopButton setEnabled:NO];
     [_exportButton setEnabled:NO];
@@ -1189,7 +1295,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     _statusLabel.editable = NO;
     _statusLabel.selectable = NO;
     _statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    _statusLabel.maximumNumberOfLines = 1;
+    CLMakeSingleLine(_statusLabel);
     _statusLabel.usesSingleLineMode = YES;
     [self addSubview:_statusLabel];
 
