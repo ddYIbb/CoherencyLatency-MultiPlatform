@@ -765,19 +765,9 @@ MatrixResult run_matrix(const Options& options, int n) {
 
     result.unpinned_pairs = unpinned_pairs;
 
-    // Same symmetry as the original: average each off-diagonal pair with its
-    // transpose.  The diagonal is already zero.  Averaging with a NaN cell
-    // yields NaN, so an unpinned pair stays N/A in both directions.
-    for (int i = 0; i < n; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            const float average =
-                (result.filtered[matrix_index(n, i, j)] +
-                 result.filtered[matrix_index(n, j, i)]) /
-                2.0f;
-            result.filtered[matrix_index(n, i, j)] = average;
-            result.filtered[matrix_index(n, j, i)] = average;
-        }
-    }
+    // Cell [i][j] holds the measurement of thread i signalling thread j, so the
+    // two directions of a pair are reported separately: the matrix and the CSV
+    // may legitimately be asymmetric.  The diagonal stays zero.
 
     return result;
 }
