@@ -20,9 +20,9 @@ None of the downloads requires installing any runtime — copy it over and it ru
 | Platform | Release asset | Minimum OS | Supported CPUs / instruction sets |
 |---|---|---|---|
 | macOS | `CoherencyLatency-macOS-v1.2.0.zip` | Intel Mac: macOS 10.7 Lion (2011); Apple Silicon Mac: macOS 11.0 Big Sur (2020) | A single Universal 2 executable containing both x86_64 and arm64 slices (covers M1/M2/M3/M4); no need to pick a version |
-| macOS (GUI) | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac: macOS 10.13; Apple Silicon Mac: macOS 11.0 | Native AppKit UI in one Universal 2 program (x86_64 + arm64), shipping both a `.app` bundle and a standalone executable |
+| macOS (GUI) | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac: macOS 10.10 Yosemite (2014); Apple Silicon Mac: macOS 11.0 | Native AppKit UI in one Universal 2 program (x86_64 + arm64), shipping both a `.app` bundle and a standalone executable |
 | Windows | `CoherencyLatency-Windows-v1.2.0.exe` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | A single-file launcher that auto-matches native x86, x64 and ARM64 payloads; the x86 build targets the plain 32-bit baseline (SSE2 not even required), x64/ARM64 use their base instruction sets |
-| Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | Windows 10 (1809) or later | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
+| Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
 | Android (CLI) | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
 | Android (GUI) | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
 | HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip` (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phones, tablets and 2-in-1; detects 2–20 logical threads at runtime |
