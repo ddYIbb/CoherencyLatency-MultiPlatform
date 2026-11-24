@@ -36,10 +36,14 @@ namespace cl_layout {
 
 // --- window size (locked design) -------------------------------------------
 
-constexpr double kDefaultWidth = 600.0;
-constexpr double kDefaultHeight = 880.0;
-constexpr double kMinWidth = 520.0;
-constexpr double kMinHeight = 760.0;
+// 1366x768 / 1280x720 laptops are the low end we must fit, so the default
+// content box is 560x640 pt (plus the ~28 pt title bar it stays inside 720) and
+// the hard minimum is 440x520 pt.  The layout is unchanged; only the frame the
+// user sees at launch is smaller.
+constexpr double kDefaultWidth = 560.0;
+constexpr double kDefaultHeight = 640.0;
+constexpr double kMinWidth = 440.0;
+constexpr double kMinHeight = 520.0;
 
 // --- constants shared with main.mm (dense spacing, ~20% below v3) ----------
 
@@ -87,6 +91,9 @@ constexpr double kCellCompactMax = 40.0;
 constexpr double kCellGapCompact = 1.0;
 // Widest row-label column in colour-overview mode ("T31" still fits).
 constexpr double kCompactLabelWidth = 26.0;
+// Below this cell size the T0..Tn-1 axis labels no longer fit without
+// overlapping each other, so the grid is drawn as a bare colour map.
+constexpr double kAxisLabelMinCell = 12.0;
 
 struct Rect {
     double x = 0.0;
@@ -201,6 +208,9 @@ struct Layout {
     // (the user: "this chart does not need to be readable, colours are enough,
     // export for the details").
     bool showCellValues = true;
+    // False when the cells are too small for the T0..Tn-1 axis labels; the grid
+    // is then a bare colour map and the numbers come from the CSV.
+    bool showAxisLabels = true;
 
     // Diagnostics for the self-test.
     double contentWidth = 0.0;
@@ -360,7 +370,23 @@ inline Layout Compute(const Metrics& in) {
     // "线程延迟矩阵 · ns/op" or the pair counter, and the headers never move.
     const double headerRowH = std::max(kColumnHeaderHeight, in.headerH);
     const double headerTop = kCardPadding + titleRowH + kMatrixTitleGap;
-    out.headerRow = Rect{kCardPadding, headerTop, innerW, headerRowH};
+    // A squeezed colour map drops the T0..Tn-1 axis labels entirely: at cell
+    // sizes below kAxisLabelMinCell the labels overlap each other, and giving
+    // their 26 pt column and 13 pt strip back to the grid is worth more than a
+    // row of unreadable numbers.  The CSV carries the values.
+    {
+        const double probeTop = headerTop + headerRowH + kHeaderRowGap;
+        const double probeLegend =
+            kCardPadding + innerH - footnoteH - kLegendRowHeight;
+        const double probeRegion =
+            std::max(probeLegend - kGridBottomGap - probeTop, 0.0);
+        const double probeW = std::max(innerW - in.matrixLabelW - 4.0, 0.0);
+        const double probeCell = std::floor(std::min(
+            probeW / static_cast<double>(n), probeRegion / static_cast<double>(n)));
+        out.showAxisLabels = probeCell >= kAxisLabelMinCell;
+    }
+    out.headerRow = Rect{kCardPadding, headerTop, innerW,
+                         out.showAxisLabels ? headerRowH : 0.0};
     const double gridTop = out.headerRow.MaxY() + kHeaderRowGap;
 
     const double legendTop = kCardPadding + innerH - footnoteH - kLegendRowHeight;
@@ -380,6 +406,9 @@ inline Layout Compute(const Metrics& in) {
     out.labelWidth = out.showCellValues
                          ? in.matrixLabelW
                          : std::min(in.matrixLabelW, kCompactLabelWidth);
+    if (!out.showAxisLabels) {
+        out.labelWidth = 0.0;
+    }
     const double availW = std::max(innerW - out.labelWidth - 4.0, 0.0);
     const double availH = std::max(out.gridRegionHeight - kGridBreathing, 0.0);
 
