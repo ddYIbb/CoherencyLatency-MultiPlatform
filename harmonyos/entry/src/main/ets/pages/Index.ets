@@ -450,7 +450,7 @@ struct Index {
       this.statsValid = false;
     }
     this.donePairs = this.totalPairs;
-    this.caption = '最终结果 · 双向平均 · ns/op';
+    this.caption = '最终结果 · 双向独立 · ns/op';
     const naPairs: number = this.countNaPairs();
     const elapsed: string = this.elapsedSeconds().toFixed(2);
     let summary: string = '完成 · ' + this.totalPairs + ' 个线程对';
