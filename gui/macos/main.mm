@@ -942,7 +942,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
                           model->smtSibling[static_cast<std::size_t>(row)] != 0;
         NSString* label = [NSString stringWithFormat:@"T%d%@", row,
                                                       star ? @"*" : @""];
-        if (roomy) {
+        if (roomy && layout.showAxisLabels) {
             CLDrawStringCentred(label,
                                 NSMakeRect(0.0, y, labelW - 4.0, cellH),
                                 CLDigitFont(static_cast<CGFloat>(layout.headerFontSize)),
@@ -1039,7 +1039,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     const CGFloat height = NSHeight(self.bounds);
     // Overview cells can be narrower than a "T31" label: then the header row
     // stays empty rather than turning into overlapping glyph soup.
-    if (cellW < 13.0) {
+    if (!layout.showAxisLabels || cellW < 13.0) {
         return;
     }
     NSFont* font = CLDigitFont(static_cast<CGFloat>(layout.headerFontSize));
