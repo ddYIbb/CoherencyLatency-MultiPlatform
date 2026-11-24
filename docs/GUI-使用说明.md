@@ -10,6 +10,8 @@ Release 里的 `CoherencyLatency-Windows-GUI-v1.2.0.zip` 解压后只有一个 `
 
 它内部同时带有 x86、x64、ARM64 三份原生程序：启动时按当前系统自动挑一个释放到 `%TEMP%` 再运行，退出后删除临时文件。首次启动时 Windows Defender 可能扫描几秒到几十秒，属正常现象。
 
+最低系统与命令行版一致：x86 / x64 需要 Windows Vista SP2 及以上，ARM64 需要 Windows 10 及以上（与系统位数对应，启动器自动匹配）。
+
 ### 界面
 
 按 Windows 11 Fluent 风格绘制，跟随系统深色/浅色模式、强调色与高对比度：
@@ -50,7 +52,7 @@ Release 里的 `CoherencyLatency-macOS-GUI-v1.2.0.zip` 解压后得到 `Coherenc
 xattr -dr com.apple.quarantine CoherencyLatency.app
 ```
 
-- `CoherencyLatency.app` 同时包含 Intel（x86_64，最低 macOS 10.13）和 Apple Silicon（arm64，最低 macOS 11.0）两个切片，不需要选版本。
+- `CoherencyLatency.app` 同时包含 Intel（x86_64，最低 macOS 10.10）和 Apple Silicon（arm64，最低 macOS 11.0）两个切片，不需要选版本。
 
 ### 界面
 
