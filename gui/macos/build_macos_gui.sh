@@ -4,7 +4,7 @@
 #   wsl -e bash /mnt/c/Users/Administrator/AppData/Local/Temp/cl_repo/gui/macos/build_macos_gui.sh
 #
 # Produces
-#   gui/macos/build/CoherencyLatency-x86_64   Mach-O x86_64, minos 10.13
+#   gui/macos/build/CoherencyLatency-x86_64   Mach-O x86_64, minos 10.10
 #   gui/macos/build/CoherencyLatency-arm64    Mach-O arm64,  minos 11.0
 #   gui/macos/build/CoherencyLatency          universal (lipo merged)
 #   gui/macos/build/CoherencyLatency.app      .app bundle with the icon
@@ -94,7 +94,7 @@ WARNING_COUNT=0
 
 compile_slice() {
     local arch="$1"          # x86_64 | arm64
-    local triple="$2"        # x86_64-apple-macos10.13 | arm64-apple-macos11.0
+    local triple="$2"        # x86_64-apple-macos10.10 | arm64-apple-macos11.0
     local gui_obj="$OBJ_DIR/main_${arch}.o"
     local engine_obj="$OBJ_DIR/engine_api_${arch}.o"
     local log="$OBJ_DIR/${arch}.log"
@@ -128,7 +128,7 @@ compile_slice() {
     echo "    -> $BUILD_DIR/CoherencyLatency-$arch"
 }
 
-compile_slice x86_64 x86_64-apple-macos10.13
+compile_slice x86_64 x86_64-apple-macos10.10
 compile_slice arm64  arm64-apple-macos11.0
 
 echo "==> merging universal binary"
