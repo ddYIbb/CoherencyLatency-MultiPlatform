@@ -25,7 +25,7 @@ None of the downloads requires installing any runtime — copy it over and it ru
 | Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
 | Android (CLI) | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
 | Android (GUI) | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
-| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip` (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phones, tablets and 2-in-1; detects 2–20 logical threads at runtime |
+| HarmonyOS | CoherencyLatency-HarmonyOS-v1.2.0.zip (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phone, foldable, wide-fold, tri-fold, tablet, 2-in-1, TV, round/square watch, and car head unit (11 device classes tested); detects 2-20 logical threads at runtime |
 
 Notes:
 
