@@ -1,12 +1,12 @@
 # CoherencyLatency Android 图形界面版 · 使用说明
 
-**版本：** 1.2.0（versionName `1.2.0`，versionCode 5，2026-11-23 构建）
+**版本：** 1.2.0（versionName `1.2.0`，versionCode 5，2026-11-25 第二次修订构建）
 **安装包：** `CoherencyLatency-Android-UI-v1.2.0.apk`（533,655 B / 521.1 KiB）
 **适用系统：** Android 4.1（API 16）及以上
 **架构：** 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择
 **界面：** 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配
 **许可：** MIT（基于 CapFrameX 的 MicroBenchX v1.0.5）
-**本次修订：** 64 位库按 16 KB 页面对齐（Android 15+ 设备不再提示兼容性警告）、移除可调试标记、触摸屏按钮一次点按即生效、跟随系统深色模式
+**本次修订：** 结果矩阵改为与 Windows/macOS/鸿蒙一致的单元格背景热力填充（此前热力色误涂在文字上）；64 位库按 16 KB 页面对齐、移除可调试标记、触摸屏按钮一次点按即生效、跟随系统深色模式
 
 ---
 
@@ -419,7 +419,7 @@ CSV 单文件约 150~200 字节（4 核）。上述数值会随系统版本、�
 APK SHA-256：
 
 ```text
-060e8dbda2bcfb83bcba9027b882c922119c558bf2adaa3ebff3abd21cc31e56
+9f6d3c9ad0fc02140ae48a974931358b3beaf3ccfe2c568415a8f32e563db31f
 ```
 
 设备上可用 Termux 校验：
