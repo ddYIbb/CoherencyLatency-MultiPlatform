@@ -233,9 +233,9 @@ std::string NarrowAnsi(const std::wstring& text) {
 
 std::wstring NsText(float value) {
     char buffer[64] = {};
-    if (cl_format_ns(value, buffer, static_cast<int>(sizeof(buffer))) != 0) {
-        return L"N/A";
-    }
+    // cl_format_ns mirrors snprintf: its return value is the character count,
+    // not an error flag, and it writes "N/A" itself when the sample is NaN.
+    cl_format_ns(value, buffer, static_cast<int>(sizeof(buffer)));
     return Widen(buffer);
 }
 
@@ -886,6 +886,19 @@ UiLayout g_layout;
 std::vector<std::wstring> g_infoLines;
 std::wstring g_footnoteText;
 
+#if defined(CL_DEBUG_AFFINITY)
+static void cl_ui_log(const char* fmt, ...) {
+    FILE* f = nullptr;
+    if (fopen_s(&f, "C:\\Users\\Administrator\\AppData\\Local\\Temp\\cl_affinity.log", "a") == 0 && f != nullptr) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(f, fmt, args);
+        va_end(args);
+        fclose(f);
+    }
+}
+#endif
+
 struct ProgressPayload {
     int done = 0;
     int total = 0;
@@ -1422,7 +1435,13 @@ UiLayout ResolveGrid(UiLayout L) {
             reserveW = wantW;
             reserveH = wantH;
         }
-        const bool tight = cell < Pxf(kAxisLabelMinCell);
+        // A column header must still hold "T31"; at 32 threads in a 520 pt card
+        // the cells drop to ~13 pt and the headers would collide into an
+        // unreadable smear, so the numbers are dropped once they no longer fit.
+        const float minLabelCell =
+            std::max(Pxf(kAxisLabelMinCell),
+                     TextWidth(g_fonts.cellSmall, L"T31") + Pxf(3.0f));
+        const bool tight = cell < minLabelCell;
         if (attempt == 0 && tight && axisLabelWidth > 0.0f) {
             axisLabelWidth = 0.0f;
             axisHeaderHeight = 0.0f;
@@ -2608,6 +2627,12 @@ void ProgressCallback(void* context, const ClProgress* progress) {
     payload->j = progress->j;
     payload->affinityOk = progress->affinity_ok;
     payload->ns = progress->latency_ns;
+#if defined(CL_DEBUG_AFFINITY)
+    if (!(progress->latency_ns == progress->latency_ns)) {
+        cl_ui_log("[cb-nan] %d %d done=%d\n", progress->i, progress->j,
+                     progress->done);
+    }
+#endif
     payload->elapsed = progress->elapsed_seconds;
     if (!PostMessageW(hwnd, WM_CL_PROGRESS, 0, reinterpret_cast<LPARAM>(payload))) {
         delete payload;
@@ -2736,6 +2761,12 @@ void OnProgressMessage(const ProgressPayload* payload) {
     g_app.lastI = payload->i;
     g_app.lastJ = payload->j;
     g_app.lastNs = payload->ns;
+#if defined(CL_DEBUG_AFFINITY)
+    if (!(payload->ns == payload->ns)) {
+        cl_ui_log("[ui-nan] %d %d done=%d\n", payload->i, payload->j,
+                     payload->done);
+    }
+#endif
     g_app.elapsed = payload->elapsed;
     bool cellUpdated = false;
     if (payload->i >= 0 && payload->j >= 0 &&
