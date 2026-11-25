@@ -27,6 +27,11 @@
 
 #include <algorithm>
 #include <atomic>
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#include <immintrin.h>
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM))
+#include <intrin.h>
+#endif
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +81,9 @@ constexpr std::size_t kAtomicAlignment = 128;
 // worker pair for every core pair, so an explicit small stack keeps the
 // per-run cost and the address-space footprint low on both platforms.
 constexpr std::size_t kWorkerStackBytes = 128 * 1024;
+// A short round (few iterations, fast cores) finishes in microseconds.  The
+// main thread spins this many pause instructions before falling back to a
+// 1 ms sleep so a short round is not charged a syscall.
 
 struct alignas(kAtomicAlignment) AtomicCell {
     std::atomic<std::uint64_t> value;
@@ -434,6 +442,18 @@ bool configure_current_thread(int cpu_index, bool use_affinity) {
 #endif
 }
 
+void cpu_relax() {
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+    _mm_pause();
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM))
+    __yield();
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield" ::: "memory");
+#else
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
+}
+
 void yield_current_thread() {
 #if defined(_WIN32)
     SwitchToThread();
@@ -645,10 +665,20 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     }
 
     while (gate.ready.load(std::memory_order_acquire) < 2) {
-        yield_current_thread();
+        cpu_relax();
     }
 
     float minimum = std::numeric_limits<float>::infinity();
+    const auto wait_round = [&gate](int round) {
+        // A pair needs only a few microseconds to finish a short round, so a
+        // syscall-based wait would outlast the round and quantise the
+        // measured round to a scheduler tick.  Yield instead: the main thread
+        // stays ready and rounds keep their true duration.
+        while (gate.round_done.load(std::memory_order_acquire) <
+               2 * (round + 1)) {
+            std::this_thread::yield();
+        }
+    };
     try {
         for (int round = 0; round < config1.rounds; ++round) {
             // Both workers are waiting for the next round here, so the shared
@@ -658,10 +688,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
 
             const std::uint64_t start = now_ns();
             gate.round_go.store(round + 1, std::memory_order_release);
-            while (gate.round_done.load(std::memory_order_acquire) <
-                   2 * (round + 1)) {
-                yield_current_thread();
-            }
+            wait_round(round);
             const std::uint64_t end = now_ns();
             if (end <= start) {
                 throw std::runtime_error("monotonic clock did not advance");
