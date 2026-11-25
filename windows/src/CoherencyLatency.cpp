@@ -27,6 +27,11 @@
 
 #include <algorithm>
 #include <atomic>
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+#include <immintrin.h>
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM))
+#include <intrin.h>
+#endif
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +44,22 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(CL_DEBUG_AFFINITY)
+#include <cstdarg>
+static void cl_debug_log(const char* fmt, ...) {
+    FILE* file = std::fopen(
+        "C:\\Users\\Administrator\\AppData\\Local\\Temp\\cl_affinity.log", "a");
+    if (file == nullptr) {
+        return;
+    }
+    std::va_list args;
+    va_start(args, fmt);
+    std::vfprintf(file, fmt, args);
+    va_end(args);
+    std::fclose(file);
+}
+#endif
 
 #if defined(__APPLE__)
 #include <dlfcn.h>
@@ -76,6 +97,9 @@ constexpr std::size_t kAtomicAlignment = 128;
 // worker pair for every core pair, so an explicit small stack keeps the
 // per-run cost and the address-space footprint low on both platforms.
 constexpr std::size_t kWorkerStackBytes = 128 * 1024;
+// A short round (few iterations, fast cores) finishes in microseconds.  The
+// main thread spins this many pause instructions before falling back to a
+// 1 ms sleep so a short round is not charged a syscall.
 
 struct alignas(kAtomicAlignment) AtomicCell {
     std::atomic<std::uint64_t> value;
@@ -469,18 +493,36 @@ bool configure_current_thread(int cpu_index, bool use_affinity) {
                         << (wanted.processor & (sizeof(KAFFINITY) * 8 - 1));
         ok = SetThreadGroupAffinity(GetCurrentThread(), &affinity, nullptr) != 0;
         if (ok) {
+            // The kernel applies a fresh affinity mask at the next scheduling
+            // point.  A tight SwitchToThread() loop can finish in a few
+            // microseconds when no other thread is ready on the current CPU,
+            // i.e. before the thread is actually moved -- a correctly pinned
+            // pair then looked "unpinned" and became N/A.  Sleep in 1 ms slices
+            // (Sleep always releases the CPU) for up to 100 ms, then verify.
             PROCESSOR_NUMBER actual = {};
-            for (int attempt = 0; attempt < 128; ++attempt) {
+            const ULONGLONG deadline = GetTickCount64() + 100;
+            for (;;) {
                 GetCurrentProcessorNumberEx(&actual);
                 if (actual.Group == affinity.Group &&
                     static_cast<int>(actual.Number) == wanted.processor) {
                     break;
                 }
-                yield_current_thread();
+                if (GetTickCount64() >= deadline) {
+                    break;
+                }
+                Sleep(1);
             }
             GetCurrentProcessorNumberEx(&actual);
             ok = actual.Group == affinity.Group &&
                  static_cast<int>(actual.Number) == wanted.processor;
+#if defined(CL_DEBUG_AFFINITY)
+            if (!ok) {
+                cl_debug_log("[pin-fail] cpu=%d wanted=%d/%d actual=%d/%d\n",
+                             cpu_index, static_cast<int>(wanted.group),
+                             wanted.processor, static_cast<int>(actual.Group),
+                             static_cast<int>(actual.Number));
+            }
+#endif
         }
     }
     return ok;
@@ -507,6 +549,18 @@ bool configure_current_thread(int cpu_index, bool use_affinity) {
     std::snprintf(name, sizeof(name), "cl-%d", cpu_index);
     pthread_setname_np(pthread_self(), name);
     return ok;
+#endif
+}
+
+void cpu_relax() {
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+    _mm_pause();
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM))
+    __yield();
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield" ::: "memory");
+#else
+    std::atomic_signal_fence(std::memory_order_seq_cst);
 #endif
 }
 
@@ -648,6 +702,13 @@ private:
                 GetCurrentProcessorNumberEx(&current);
                 if (current.Group != static_cast<WORD>(wanted.group) ||
                     static_cast<int>(current.Number) != wanted.processor) {
+#if defined(CL_DEBUG_AFFINITY)
+                    cl_debug_log(
+                        "[moved] cpu=%d round=%d wanted=%d/%d actual=%d/%d\n",
+                        config->cpu_index, round, static_cast<int>(wanted.group),
+                        wanted.processor, static_cast<int>(current.Group),
+                        static_cast<int>(current.Number));
+#endif
                     config->affinity_ok = false;
                 }
             }
@@ -741,10 +802,21 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     }
 
     while (gate.ready.load(std::memory_order_acquire) < 2) {
-        yield_current_thread();
+        cpu_relax();
     }
 
     float minimum = std::numeric_limits<float>::infinity();
+    const auto wait_round = [&gate](int round) {
+        // A pair needs only a few microseconds to finish a short round, so a
+        // syscall-based wait would outlast the round and, on Windows, could
+        // quantise the measured round to a scheduler tick.  Yield instead:
+        // SwitchToThread keeps the main thread ready without burning a whole
+        // core for long, and rounds stay at their true duration.
+        while (gate.round_done.load(std::memory_order_acquire) <
+               2 * (round + 1)) {
+            yield_current_thread();
+        }
+    };
     try {
         for (int round = 0; round < config1.rounds; ++round) {
             // Both workers are waiting for the next round here, so the shared
@@ -754,10 +826,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
 
             const std::uint64_t start = now_ns();
             gate.round_go.store(round + 1, std::memory_order_release);
-            while (gate.round_done.load(std::memory_order_acquire) <
-                   2 * (round + 1)) {
-                yield_current_thread();
-            }
+            wait_round(round);
             const std::uint64_t end = now_ns();
             if (end <= start) {
                 throw std::runtime_error("monotonic clock did not advance");
@@ -788,6 +857,12 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
 
     PairOutcome outcome;
     outcome.affinity_ok = config1.affinity_ok && config2.affinity_ok;
+#if defined(CL_DEBUG_AFFINITY)
+    if (!outcome.affinity_ok) {
+        cl_debug_log("[pair-fail] %d<->%d c1=%d c2=%d\n", processor1, processor2,
+                     config1.affinity_ok ? 1 : 0, config2.affinity_ok ? 1 : 0);
+    }
+#endif
     outcome.latency_ns = outcome.affinity_ok
                              ? minimum
                              : std::numeric_limits<float>::quiet_NaN();
