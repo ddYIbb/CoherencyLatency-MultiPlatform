@@ -9,6 +9,7 @@
 #include <napi/native_api.h>
 #include <hilog/log.h>
 #include <qos/qos.h>
+#include <dlfcn.h>
 
 #include <fcntl.h>
 #include <pthread.h>
@@ -37,6 +38,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace {
+int fast_sched_hint(int scene, int state, int duration, const int* tids,
+                    int tid_count);
+}
 
 namespace {
 
@@ -123,6 +129,11 @@ std::uint64_t now_ns() {
     }
     return 0;
 }
+
+// Pause/yield instructions the main thread spends on a round before it falls
+// back to the cv wait.  Only the wait of the measurement thread is affected;
+// the workers and the timed window are unchanged.
+constexpr int kRoundSpinLimit = 20000;
 
 inline void spin_pause() {
 #if defined(__aarch64__) || defined(__arm__)
@@ -1303,6 +1314,16 @@ private:
         ThreadPerfState perf;
         capture_thread_perf(&perf);
         apply_thread_perf(&perf, config->physical_core, config->high_qos);
+        if (config->high_qos) {
+            // Tell FASTKit that this prime-core worker is part of a
+            // performance-sensitive scene before the pin is attempted; the
+            // vendor scheduler otherwise rewrites the prime affinity mask.
+            const int hint_tid = static_cast<int>(gettid());
+            const int hint_rc = fast_sched_hint(7, 1, 1, &hint_tid, 1);
+            OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
+                         "FASTHINT worker tid=%{public}d rc=%{public}d",
+                         hint_tid, hint_rc);
+        }
         config->tid.store(static_cast<int>(gettid()), std::memory_order_release);
         PinResult pin;
         int candidate_count = 1;
@@ -1962,11 +1983,27 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
             // legitimate run; 60 s is far above any realistic round yet still
             // catches a genuinely stuck worker.  abort() is polled every 20 ms,
             // so Stop stays responsive regardless of this timeout.
-            const bool finished = wait_for_condition(
-                gate, std::chrono::seconds(60), [&gate, round] {
-                    return gate.round_done.load(std::memory_order_acquire) >=
-                           2 * (round + 1);
-                });
+            // The timed window is taken from the worker-reported edges below,
+            // so this wait is outside the measurement.  A round is normally
+            // far shorter than the 20 ms cv slice, so spin with a pause/yield
+            // first and only then fall back to the interruptible wait that
+            // honours Stop and the 60 s round timeout.
+            const auto round_finished = [&gate, round] {
+                return gate.round_done.load(std::memory_order_acquire) >=
+                       2 * (round + 1);
+            };
+            bool finished = false;
+            for (int spin = 0; spin < kRoundSpinLimit; ++spin) {
+                if (round_finished()) {
+                    finished = true;
+                    break;
+                }
+                spin_pause();
+            }
+            if (!finished) {
+                finished = wait_for_condition(gate, std::chrono::seconds(60),
+                                              round_finished);
+            }
             if (!finished) {
                 abort_pair(gate, config1.rounds);
                 gate.cv.notify_all();
@@ -2387,6 +2424,131 @@ private:
     std::atomic<bool> stop_ {false};
 };
 
+
+// ---------------------------------------------------------------------------
+// FASTKit scheduling optimization (API 26+).  Loaded at run time so the same
+// HAP still starts on devices that do not ship the FASTKit library.
+// ---------------------------------------------------------------------------
+struct FastSchedApi {
+    void* handle = nullptr;
+    int (*create_builder)(void**) = nullptr;
+    void (*destroy_builder)(void*) = nullptr;
+    int (*set_scene_type)(void*, int) = nullptr;
+    int (*set_scene_state)(void*, int) = nullptr;
+    int (*set_duration_type)(void*, int) = nullptr;
+    int (*set_tids)(void*, int*, unsigned) = nullptr;
+    int (*build)(void*, void**) = nullptr;
+    void (*destroy_config)(void*) = nullptr;
+    int (*perf_hint)(const void*) = nullptr;
+};
+
+FastSchedApi& fast_sched_api() {
+    static FastSchedApi api = [] {
+        FastSchedApi a;
+        a.handle = dlopen("libscheduling_optimization.z.so",
+                          RTLD_NOW | RTLD_LOCAL);
+        if (a.handle == nullptr) {
+            const char* err = dlerror();
+            OH_LOG_Print(LOG_APP, LOG_WARN, kDomain, kTag,
+                         "FASTHINT dlopen failed %{public}s",
+                         err != nullptr ? err : "?");
+            return a;
+        }
+        *(reinterpret_cast<void**>(&a.create_builder)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_Create");
+        *(reinterpret_cast<void**>(&a.destroy_builder)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_Destroy");
+        *(reinterpret_cast<void**>(&a.set_scene_type)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_SetSceneType");
+        *(reinterpret_cast<void**>(&a.set_scene_state)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_SetSceneState");
+        *(reinterpret_cast<void**>(&a.set_duration_type)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_SetDurationType");
+        *(reinterpret_cast<void**>(&a.set_tids)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_SetTids");
+        *(reinterpret_cast<void**>(&a.build)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfigBuilder_Build");
+        *(reinterpret_cast<void**>(&a.destroy_config)) =
+            dlsym(a.handle, "HMS_FAST_PerfHintConfig_Destroy");
+        *(reinterpret_cast<void**>(&a.perf_hint)) =
+            dlsym(a.handle, "HMS_FAST_SchedulingOptimization_PerfHint");
+        return a;
+    }();
+    return api;
+}
+
+// scene: 7 = ANIMATION, state: 1 = BEGIN / 0 = END, duration: 1 = SHORT,
+// 2 = MEDIUM, 3 = LONG.  Returns the FASTKit error code, or a negative local
+// error when the library or one of its symbols is missing.
+int fast_sched_hint(int scene, int state, int duration, const int* tids,
+                    int tid_count) {
+    FastSchedApi& api = fast_sched_api();
+    if (api.perf_hint == nullptr || api.create_builder == nullptr ||
+        api.build == nullptr) {
+        return -1000;
+    }
+    void* builder = nullptr;
+    int rc = api.create_builder(&builder);
+    if (rc != 0 || builder == nullptr) {
+        return rc == 0 ? -1001 : rc;
+    }
+    if (api.set_scene_type != nullptr) {
+        api.set_scene_type(builder, scene);
+    }
+    if (api.set_scene_state != nullptr) {
+        api.set_scene_state(builder, state);
+    }
+    if (api.set_duration_type != nullptr) {
+        api.set_duration_type(builder, duration);
+    }
+    if (tids != nullptr && tid_count > 0 && api.set_tids != nullptr) {
+        api.set_tids(builder, const_cast<int*>(tids),
+                     static_cast<unsigned>(tid_count));
+    }
+    void* config = nullptr;
+    rc = api.build(builder, &config);
+    if (api.destroy_builder != nullptr) {
+        api.destroy_builder(builder);
+    }
+    if (rc != 0 || config == nullptr) {
+        return rc == 0 ? -1002 : rc;
+    }
+    const int hint_rc =
+        api.perf_hint != nullptr ? api.perf_hint(config) : -1003;
+    if (api.destroy_config != nullptr) {
+        api.destroy_config(config);
+    }
+    return hint_rc;
+}
+
+// Reports the whole matrix run as a performance-sensitive scene for as long
+// as it lasts.  RAII so every exit path ends the hint.
+struct FastHintScope {
+    int scene;
+    int duration;
+    int tid;
+    bool active = false;
+    FastHintScope(int scene_type, int duration_type)
+        : scene(scene_type),
+          duration(duration_type),
+          tid(static_cast<int>(gettid())) {
+        const int rc = fast_sched_hint(scene, 1, duration, &tid, 1);
+        active = rc == 0;
+        OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
+                     "FASTHINT begin scene=%{public}d dur=%{public}d rc=%{public}d tid=%{public}d",
+                     scene, duration, rc, tid);
+    }
+    ~FastHintScope() {
+        if (!active) {
+            return;
+        }
+        const int rc = fast_sched_hint(scene, 0, duration, &tid, 1);
+        OH_LOG_Print(LOG_APP, LOG_INFO, kDomain, kTag,
+                     "FASTHINT end scene=%{public}d rc=%{public}d", scene,
+                     rc);
+    }
+};
+
 void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                 std::uint64_t iterations, std::uint64_t runs, bool owned_mode,
                 bool thread_mode) {
@@ -2398,6 +2560,9 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
 
     int done_pairs = 0;
     bool aborted = false;
+    // Whole-run FASTKit performance scene: last-resort, in-app way to keep
+    // the prime cluster reachable without any touch interaction.
+    FastHintScope fast_hint(7 /* ANIMATION */, 3 /* LONG */);
     // Cold start: the prime core is parked for the first seconds after the
     // app launches, and a pin attempt against a parked core is silently
     // rewritten to a mid core - that is the N/A the user saw when the test
@@ -2438,8 +2603,10 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
     // One run of a pair already measures the round trip in both directions
     // and divides the elapsed time by two.  The old loop measured the
     // transpose as a second, independent pair and then averaged the two;
-    // that duplicated every p7 retry for no accuracy gain.  Measure the
-    // upper triangle once and mirror it below.
+    // that duplicated every p7 retry for no accuracy gain.  Since 1.2.0 every
+    // ordered pair (i, j) is measured and recorded on its own: matrix[i][j]
+    // and matrix[j][i] are two independent measurements and are neither
+    // averaged nor copied into each other.
     for (int row = 0; row < n; ++row) {
         for (int column = row + 1; column < n; ++column) {
             pair_order.emplace_back(row, column);
@@ -2779,11 +2946,19 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
                     const auto wait_start = std::chrono::steady_clock::now();
                     // The prime SMT pair is the most expensive window to
                     // catch: on some runs it only opened after ~10 s of trying.
-                    // Give it a budget that survives that, and keep every other
-                    // pair short so a device that never opens a window still
+                    // Cross-cluster pairs that touch the prime cluster (a mid
+                    // core against a prime sibling) failed the same way on a
+                    // second device: their windows open on the same
+                    // second-scale rhythm, an 8 s budget ran out twice in one
+                    // run, and every cross-prime pair deserves the same
+                    // patience.  Only pairs with no prime involvement keep the
+                    // short budget so a device that never opens a window still
                     // finishes in reasonable time.
                     const long wait_budget_ms =
-                        (same_physical && prime_pair) ? 30000 : 8000;
+                        (prime_pair || is_prime_index(row) ||
+                         is_prime_index(column))
+                            ? 30000
+                            : 8000;
                     int round = 0;
                     while (!result.affinity_ok &&
                            std::chrono::duration_cast<std::chrono::milliseconds>(
