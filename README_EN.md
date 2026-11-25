@@ -45,6 +45,8 @@ Notes:
 
 Latest release: [v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0) — one version number across macOS / Windows / Android / HarmonyOS:
 
+**2026-11-26 adaptation update**: HarmonyOS build tested on 11 device classes (phone / Mate X7 foldable / Pura X Max wide-fold / TripleFold tri-fold / tablet / 2in1 / folding 2in1 / TV / round watch / square watch / car). TV and car support D-pad focus + OK key. Android UI version now draws the result matrix with cell-background heat colors (consistent with Windows/macOS/HarmonyOS). Engine gains a spin-limit + micro-sleep wait strategy on all platforms.
+
 | Platform | Release asset |
 |---|---|
 | macOS | [CoherencyLatency-macOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-v1.2.0.zip) |
