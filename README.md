@@ -45,6 +45,8 @@
 
 最新版本：[v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)（macOS / Windows / Android / HarmonyOS 四平台统一版本号）。
 
+**2026-11-26 适配更新**：鸿蒙版完成 11 类设备形态实测（手机 / 折叠屏 Mate X7 / 阔折叠 Pura X Max / 三折叠 TripleFold / 平板 / 2in1 / 折叠 2in1 / 电视 / 圆形手表 / 方形手表 / 车机），TV 与车机支持遥控器方向键 + OK 键操作，手表有圆形/方形专属布局；Android UI 版结果矩阵改为单元格背景热力填充（与 Windows/macOS/鸿蒙一致）；引擎统一加入自旋上限 + 微睡眠等待策略，降低空转开销。
+
 | 平台 | Release 文件 |
 |---|---|
 | macOS | [CoherencyLatency-macOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-v1.2.0.zip) |
