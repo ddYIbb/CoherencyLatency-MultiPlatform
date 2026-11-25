@@ -25,7 +25,7 @@
 | Windows（图形界面） | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 原生 Win32 界面，跟随系统深色模式与强调色；单文件启动器同样自动匹配 x86、x64、ARM64 |
 | Android（命令行） | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
 | Android（图形界面） | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
-| HarmonyOS | `CoherencyLatency-HarmonyOS-v1.2.0.zip`（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、平板、2in1；动态识别 2–20 个逻辑线程 |
+| HarmonyOS | CoherencyLatency-HarmonyOS-v1.2.0.zip（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、折叠屏、阔折叠、三折叠、平板、2in1、电视、圆形/方形手表、车机（11 类设备形态已实测）；动态识别 2–20 个逻辑线程 |
 
 几点说明：
 
