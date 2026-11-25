@@ -1,5 +1,7 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { window } from '@kit.ArkUI';
+import { deviceInfo as sysDeviceInfo } from '@kit.BasicServicesKit';
+import { window, display, LengthMetrics, ColorMetrics } from '@kit.ArkUI';
+import { displaySync } from '@kit.ArkGraphics2D';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -59,6 +61,17 @@ struct Index {
   @State private smtText: string = '';
   @State private hasSmt: boolean = false;
   @State private darkMode: boolean = false;
+  /** 关于 / 开源许可 / 隐私说明 弹层：0 关闭，1 关于，2 许可，3 隐私 */
+  @State private aboutDlg: number = 0;
+  @State private showFullLicense: boolean = false;
+  /** 测试期间逐帧递增，强制 ArkUI 持续请求 vsync，避免窗口被系统判定为空闲。 */
+  @State private framePulse: number = 0;
+  /** 当前窗口宽度（vp）。单屏/双屏保持单列，三屏或平板/2in1 自动切双列。 */
+  @State private viewWidth: number = 360;
+  /** 电视：遥控器 D-pad 焦点导航 + 焦点描边。 */
+  @State private tvMode: boolean = false;
+  @State private roundScreen: boolean = true;
+  @State private focusKey: string = '';
 
   // 缓存矩阵统计量：cells 每次更新只重算一次，避免每个单元格都全表扫描（O(n^4)→O(n^2)）
   private statMin: number = 0;
@@ -67,6 +80,11 @@ struct Index {
   private statsValid: boolean = false;
 
   private timerId: number = -1;
+  private resizeTimer: number = -1;
+  /** 小屏（手表）点开始后自动滚到矩阵，省掉一次手动滑动。 */
+  private scroller: Scroller = new Scroller();
+  private pendingWidth: number = 0;
+  private frameSync: displaySync.DisplaySync | null = null;
   private startMillis: number = 0;
   private lastCsv: string = '';
   private lastCsvName: string = '';
@@ -74,6 +92,19 @@ struct Index {
   private smtFlags: boolean[] = [];
 
   aboutToAppear(): void {
+    try {
+      const deviceType: string = sysDeviceInfo.deviceType;
+      this.tvMode = deviceType === 'tv' || deviceType === 'car';
+    } catch (error) {
+      this.tvMode = false;
+    }
+    try {
+      const info = display.getDefaultDisplaySync();
+      this.roundScreen = info.screenShape === display.ScreenShape.ROUND;
+      console.info('[CL] shape=' + info.screenShape + ' round=' + this.roundScreen);
+    } catch (error) {
+      this.roundScreen = true;
+    }
     this.readDevice();
     this.versionText = benchVersion();
     this.applySystemTheme();
@@ -83,6 +114,86 @@ struct Index {
     // N/A.  Keeping the screen on for the lifetime of this page removes that
     // failure mode without asking the user to keep swiping.
     this.setKeepScreenOn(true);
+  }
+
+  // TV 遥控器焦点：电视没有触摸，必须靠方向键在四个按钮之间移动、按 OK 激活。
+  private tvFocusOrder(): string[] {
+    const list: string[] = [];
+    if (!this.running && this.n >= 2) {
+      list.push('start');
+    }
+    if (this.running) {
+      list.push('stop');
+    }
+    if (this.hasResult && !this.running) {
+      list.push('csv');
+      list.push('save');
+    }
+    if (list.length === 0) {
+      list.push('start');
+    }
+    return list;
+  }
+
+  private tvFocusId(key: string): string {
+    if (key === 'start') {
+      return 'btn_start';
+    }
+    if (key === 'stop') {
+      return 'btn_stop';
+    }
+    if (key === 'csv') {
+      return 'btn_csv';
+    }
+    return 'btn_save';
+  }
+
+  private tvApplyFocus(): void {
+    if (!this.tvMode) {
+      return;
+    }
+    try {
+      this.getUIContext().getFocusController().requestFocus(this.tvFocusId(this.focusKey));
+    } catch (error) {
+    }
+  }
+
+  private tvMoveFocus(step: number): void {
+    const order: string[] = this.tvFocusOrder();
+    let index: number = order.indexOf(this.focusKey);
+    if (index < 0) {
+      index = 0;
+    } else {
+      index = (index + step + order.length) % order.length;
+    }
+    this.focusKey = order[index];
+    this.tvApplyFocus();
+  }
+
+  private tvActivate(): void {
+    const order: string[] = this.tvFocusOrder();
+    if (order.indexOf(this.focusKey) < 0) {
+      this.focusKey = order[0];
+    }
+    if (this.focusKey === 'start' && !this.running && this.n >= 2) {
+      this.startTest();
+    } else if (this.focusKey === 'stop' && this.running) {
+      this.stopTest();
+    } else if (this.focusKey === 'csv' && this.hasResult && !this.running) {
+      this.copyCsv();
+    } else if (this.focusKey === 'save' && this.hasResult && !this.running) {
+      this.exportAgain();
+    }
+  }
+
+  private onTvKey(code: number): void {
+    if (code === 2013 || code === 2015) {
+      this.tvMoveFocus(1);
+    } else if (code === 2012 || code === 2014) {
+      this.tvMoveFocus(-1);
+    } else if (code === 2054 || code === 2055 || code === 2016 || code === 23) {
+      this.tvActivate();
+    }
   }
 
   private setKeepScreenOn(keep: boolean): void {
@@ -98,6 +209,12 @@ struct Index {
 
   onPageShow(): void {
     this.applySystemTheme();
+    if (this.tvMode) {
+      this.focusKey = 'start';
+      setTimeout(() => {
+        this.tvApplyFocus();
+      }, 500);
+    }
   }
 
   private applySystemTheme(): void {
@@ -112,6 +229,10 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    if (this.resizeTimer !== -1) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = -1;
+    }
     this.setKeepScreenOn(false);
     this.stopTimer();
     if (this.running) {
@@ -124,6 +245,38 @@ struct Index {
       benchAbort();
     }
     this.stopTimer();
+  }
+
+  // -------------------------------------------------------------------------
+  // 关于 / 开源许可 / 隐私说明
+  // -------------------------------------------------------------------------
+
+  private aboutTitle(): string {
+    if (this.aboutDlg === 2) {
+      return this.getString('about_license_title');
+    }
+    if (this.aboutDlg === 3) {
+      return this.getString('about_privacy_title');
+    }
+    return this.getString('about_about_title');
+  }
+
+  private aboutBody(): string {
+    if (this.aboutDlg === 2) {
+      return this.getString('about_license_body');
+    }
+    if (this.aboutDlg === 3) {
+      return this.getString('about_privacy_body');
+    }
+    return this.getString('about_about_body');
+  }
+
+  private getString(name: string): string {
+    try {
+      return getContext(this).resourceManager.getStringByNameSync(name);
+    } catch (error) {
+      return '';
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -174,8 +327,13 @@ struct Index {
     if (this.n < 2) {
       this.statusText = '本机没有探测到可测试的逻辑线程，无法测试';
     } else {
-      this.statusText = '就绪 · ' + this.n + ' 个逻辑线程（' + this.coreLabel() +
-        '）· ' + this.n + '×' + this.n + ' 线程矩阵';
+      if (this.isCompact()) {
+        // 手表一行只有约 220 vp，长句会被折成两行还断开词，改用短句。
+        this.statusText = '就绪 · ' + this.n + ' 线程 · ' + this.n + '×' + this.n + ' 矩阵';
+      } else {
+        this.statusText = '就绪 · ' + this.n + ' 个逻辑线程（' + this.coreLabel() +
+          '）· ' + this.n + '×' + this.n + ' 线程矩阵';
+      }
     }
   }
 
@@ -259,7 +417,45 @@ struct Index {
     return 'T' + thread + suffix;
   }
 
+  /** 宽屏断点：>= 840 vp（三屏态 / 平板 / 2in1）切换为双列布局。 */
+  private isWide(): boolean {
+    return this.viewWidth >= 840;
+  }
+
+  /** 小屏（圆形手表 466 vp 及其它 <600 vp 设备）：压缩标题与卡片内边距。 */
+  private isCompact(): boolean {
+    return this.viewWidth < 600;
+  }
+
+  /** 圆形表盘需要更大的左右留白，方形表盘可以贴着边框排布。 */
+  private isRoundWatch(): boolean {
+    return this.isCompact() && this.roundScreen;
+  }
+
+  private watchPadding(): number {
+    if (!this.isCompact()) {
+      return 16;
+    }
+    return this.roundScreen ? 30 : 12;
+  }
+
+  /** 方形表盘屏幕更矮（480x408），按钮随之收窄，避免首屏只剩按钮。 */
+  private btnHeight(): number {
+    if (!this.isCompact()) {
+      return 48;
+    }
+    return this.roundScreen ? 44 : 40;
+  }
+
+  /** 方形表盘可用宽度更大，矩阵可以按实际宽度铺开。 */
+  private compactMatrixWidth(): number {
+    return this.roundScreen ? 150 : 196;
+  }
+
   private matrixLabelWidth(): number {
+    if (this.isCompact()) {
+      return this.roundScreen ? 26 : 24;
+    }
     if (this.n >= 13) {
       return 22;
     }
@@ -284,7 +480,14 @@ struct Index {
   // the cell width from the available width (about 332 vp inside the card)
   // instead of hard-coding one branch per matrix size.
   private matrixCellWidth(): number {
-    const available: number = 332;
+    const wide: boolean = this.isWide();
+    if (this.isCompact()) {
+      const compactAvailable: number = this.compactMatrixWidth();
+      const compactComputed: number = Math.floor(
+        (compactAvailable - this.matrixLabelWidth() - (this.n - 1) * this.matrixCellGap()) / Math.max(1, this.n));
+      return this.roundScreen ? Math.max(20, Math.min(30, compactComputed)) : Math.max(24, Math.min(38, compactComputed));
+    }
+    const available: number = wide ? 640 : 332;
     const label: number = this.matrixLabelWidth();
     const gap: number = this.matrixCellGap();
     const computed: number = Math.floor(
@@ -292,18 +495,50 @@ struct Index {
     if (this.n >= 9) {
       // The matrix card scrolls horizontally, so keep cells readable instead
       // of squeezing a 20-thread layout into the card width.
-      return Math.max(20, Math.min(32, computed));
+      return wide ? Math.max(28, Math.min(36, computed)) : Math.max(20, Math.min(32, computed));
     }
+    if (!wide) {
+      if (this.viewWidth >= 600) {
+        const bigAvailable: number = Math.min(this.viewWidth, 620) - 60;
+        const bigComputed: number = Math.floor(
+          (bigAvailable - label - (this.n - 1) * gap) / Math.max(1, this.n));
+        return Math.max(44, Math.min(72, bigComputed));
+      }
+      if (this.n === 8) {
+        return 33;
+      }
+      if (this.n === 7) {
+        return 37;
+      }
+      if (this.n >= 6) {
+        return 44;
+      }
+      return 46;
+    }
+    // 宽屏时把 4~8 线程矩阵放大到卡片可用宽度，避免中间只占一小块。
     if (this.n === 8) {
-      return 33;
+      return Math.min(78, Math.max(56, computed));
     }
     if (this.n === 7) {
-      return 37;
+      return Math.min(90, Math.max(60, computed));
     }
     if (this.n >= 6) {
-      return 44;
+      return Math.min(100, Math.max(64, computed));
     }
-    return 46;
+    return Math.min(120, Math.max(60, computed));
+  }
+
+  private matrixCellHeight(): number {
+    if (this.isCompact()) {
+      return this.roundScreen ? 22 : 26;
+    }
+    if (this.isWide() && this.n <= 6) {
+      return 56;
+    }
+    if (this.viewWidth >= 600 && this.n <= 6) {
+      return 40;
+    }
+    return 26;
   }
 
   private matrixFontSize(): number {
@@ -381,6 +616,44 @@ struct Index {
     this.running = true;
     this.startMillis = Date.now();
     this.startTimer();
+    this.startFramePump();
+    if (this.isCompact()) {
+      // 手表一屏放不下：点开始后自动把矩阵滚进视野。方形表盘屏幕更矮、
+      // 首屏更紧凑，滚动距离要小一些，否则矩阵的表头行会被顶出屏幕。
+      const matrixOffset: number = this.roundScreen ? 210 : 170;
+      setTimeout(() => {
+        try {
+          this.scroller.scrollTo({ xOffset: 0, yOffset: matrixOffset, animation: { duration: 300 } });
+        } catch (error) {
+        }
+      }, 80);
+    }
+  }
+
+  private startFramePump(): void {
+    this.stopFramePump();
+    try {
+      const sync = displaySync.create();
+      sync.setExpectedFrameRateRange({ min: 60, max: 120, expected: 120 });
+      sync.on('frame', () => {
+        this.framePulse = (this.framePulse + 1) % 1000000;
+      });
+      sync.start();
+      this.frameSync = sync;
+    } catch (error) {
+      this.frameSync = null;
+    }
+  }
+
+  private stopFramePump(): void {
+    if (this.frameSync !== null) {
+      try {
+        this.frameSync.stop();
+        this.frameSync.off('frame');
+      } catch (error) {
+      }
+      this.frameSync = null;
+    }
   }
 
   private startTimer(): void {
@@ -395,6 +668,7 @@ struct Index {
       clearInterval(this.timerId);
       this.timerId = -1;
     }
+    this.stopFramePump();
   }
 
   private pollOnce(): void {
@@ -419,10 +693,10 @@ struct Index {
         const columnLabel: string = 'T' + this.coreIds[result.column];
         if (Number.isNaN(result.latency)) {
           this.statusText = '测量中 ' + result.done + '/' + result.total + ' · ' +
-            rowLabel + '↔' + columnLabel + ' N/A（绑核失败）';
+            rowLabel + '-' + columnLabel + ' N/A（绑核失败）';
         } else {
           this.statusText = '测量中 ' + result.done + '/' + result.total + ' · ' +
-            rowLabel + '↔' + columnLabel + ' ' + result.latency.toFixed(1) +
+            rowLabel + '-' + columnLabel + ' ' + result.latency.toFixed(1) +
             ' ns · 用时 ' + this.elapsedSeconds().toFixed(1) + ' s';
         }
       }
@@ -442,6 +716,9 @@ struct Index {
   }
 
   private finishTest(result: PollResult): void {
+    if (this.tvMode) {
+      this.focusKey = 'start';
+    }
     this.stopTimer();
     this.running = false;
     const finalMatrix: number[] = benchMatrix();
@@ -489,6 +766,9 @@ struct Index {
   }
 
   private stopTest(): void {
+    if (this.tvMode) {
+      this.focusKey = 'start';
+    }
     if (!this.running) {
       return;
     }
@@ -582,9 +862,6 @@ struct Index {
   }
 
   private refreshStats(): void {
-    if (this.statsValid) {
-      return;
-    }
     let min: number = Number.POSITIVE_INFINITY;
     let max: number = Number.NEGATIVE_INFINITY;
     let sum: number = 0;
@@ -616,7 +893,6 @@ struct Index {
       this.statMax = max;
       this.statAverage = sum / count;
     }
-    this.statsValid = true;
   }
 
   private minimum(): number {
@@ -810,61 +1086,68 @@ struct Index {
     Column() {
       this.sectionTitle('设备信息')
       Text(this.logicalCores + ' 个逻辑线程 · ' + this.cacheLine + ' B 缓存行 · ' + this.abi)
-        .fontSize(13)
+        .fontSize(this.isCompact() ? 11.5 : 13)
         .fontColor(this.textSecondary())
         .fontFamily('monospace')
+        .textAlign(TextAlign.Start)
         .width('100%')
       if (this.physicalCount > 0) {
         Text('物理核 ' + this.physicalCount + ' 个' + (this.hasSmt ?
           ' · 同核超线程：' + this.smtText : ''))
-          .fontSize(11.5)
+          .fontSize(this.isCompact() ? 10 : 11.5)
           .fontColor(this.textSecondary())
+          .textAlign(TextAlign.Start)
           .margin({ top: 6 })
           .width('100%')
       }
       if (this.n < this.logicalCores) {
         Text('可稳定绑定 ' + this.n + ' 个线程，另有 ' +
           (this.logicalCores - this.n) + ' 个线程未纳入矩阵（系统限制）')
-          .fontSize(11.5)
+          .fontSize(this.isCompact() ? 10 : 11.5)
           .fontColor(this.textTertiary())
+          .textAlign(TextAlign.Start)
           .margin({ top: 6 })
           .width('100%')
       }
       if (this.hasSmt) {
         Text('测量对象：' + this.coreLabel() + ' 共 ' + this.n + ' 个逻辑线程；同核两个线程之间的延迟通常约 30 ns')
-          .fontSize(11.5)
+          .fontSize(this.isCompact() ? 10 : 11.5)
           .fontColor(this.textTertiary())
+          .textAlign(TextAlign.Start)
           .margin({ top: 6 })
           .width('100%')
       }
       Text('固定参数：' + this.n + ' 个逻辑线程 · 1,000,000 次 · 3 轮 · Bounce')
-        .fontSize(11.5)
+        .fontSize(this.isCompact() ? 10 : 11.5)
         .fontColor(this.textTertiary())
+        .textAlign(TextAlign.Start)
         .margin({ top: 6 })
         .width('100%')
       Text(this.versionText)
-        .fontSize(11)
+        .fontSize(this.isCompact() ? 9.5 : 11)
         .fontColor(this.textTertiary())
+        .textAlign(TextAlign.Start)
         .margin({ top: 4 })
         .width('100%')
     }
     .alignItems(HorizontalAlign.Start)
-    .padding(16)
+    .padding(this.isCompact() ? (this.roundScreen ? 10 : 12) : 16)
     .width('100%')
     .backgroundColor(this.cardColor())
-    .borderRadius(14)
-    .margin({ top: 16 })
+    .borderRadius(this.isCompact() ? 10 : 14)
+    .margin({ top: this.isCompact() ? 10 : 16 })
   }
 
   @Builder
   private matrixCard() {
     Column() {
       Row() {
-        Text(this.caption)
-          .fontSize(12)
+        Text(this.isCompact() ? '最终结果 · ns/op' : this.caption)
+          .fontSize(this.isCompact() ? 10.5 : 12)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.textTertiary())
-          .letterSpacing(1)
+          .letterSpacing(this.isCompact() ? 0 : 1)
+          .layoutWeight(1)
         Blank()
         Text(this.donePairs + '/' + Math.max(0, this.totalPairs))
           .fontSize(11.5)
@@ -874,6 +1157,7 @@ struct Index {
       .margin({ bottom: 10 })
 
       Scroll() {
+        Row() {
         Column() {
           Row() {
             Text('')
@@ -902,7 +1186,7 @@ struct Index {
                   .backgroundColor(this.cellBackground(row, column))
                   .borderRadius(5)
                   .width(this.matrixCellWidth())
-                  .height(26)
+                  .height(this.matrixCellHeight())
                   .textAlign(TextAlign.Center)
                   .margin({ right: this.matrixCellGap(), bottom: 3 })
               }, (column: number) => 'c' + row + '_' + column)
@@ -910,27 +1194,34 @@ struct Index {
           }, (row: number) => 'r' + row)
         }
         .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .justifyContent((this.isWide() || this.viewWidth >= 600) ? FlexAlign.Center : FlexAlign.Start)
       }
       .scrollable(ScrollDirection.Horizontal)
       .scrollBar(BarState.Off)
       .width('100%')
 
       Row() {
-        Text('低').fontSize(10.5).fontColor(this.textTertiary())
-        Row()
-          .width(72)
-          .height(6)
-          .borderRadius(3)
-          .linearGradient({
-            angle: 90,
-            colors: [['#12B76A', 0.0], ['#F79009', 0.5], ['#F04438', 1.0]]
-          })
-          .margin({ left: 6, right: 6 })
-        Text('高').fontSize(10.5).fontColor(this.textTertiary())
-        Blank()
-        Text('平均 ' + this.average().toFixed(1) + ' · 最小 ' + this.minimum().toFixed(1) +
-          ' · 最大 ' + this.maximum().toFixed(1) + ' ns')
-          .fontSize(10.5)
+        if (!this.isCompact()) {
+          Text('低').fontSize(10.5).fontColor(this.textTertiary())
+          Row()
+            .width(72)
+            .height(6)
+            .borderRadius(3)
+            .linearGradient({
+              angle: 90,
+              colors: [['#12B76A', 0.0], ['#F79009', 0.5], ['#F04438', 1.0]]
+            })
+            .margin({ left: 6, right: 6 })
+          Text('高').fontSize(10.5).fontColor(this.textTertiary())
+          Blank()
+        }
+        Text(this.isCompact() ?
+          ('平均 ' + this.average().toFixed(1) + ' · 最大 ' + this.maximum().toFixed(1) + ' ns') :
+          ('平均 ' + this.average().toFixed(1) + ' · 最小 ' + this.minimum().toFixed(1) +
+            ' · 最大 ' + this.maximum().toFixed(1) + ' ns'))
+          .fontSize(this.isCompact() ? 9.5 : 10.5)
           .fontColor(this.textSecondary())
       }
       .width('100%')
@@ -952,147 +1243,354 @@ struct Index {
       }
     }
     .alignItems(HorizontalAlign.Start)
-    .padding(this.n >= 9 ? 8 : 12)
+    .padding(this.isCompact() ? (this.roundScreen ? 8 : 10) : (this.n >= 9 ? 8 : 12))
     .width('100%')
     .backgroundColor(this.cardColor())
-    .borderRadius(14)
-    .margin({ top: 16 })
+    .borderRadius(this.isCompact() ? 10 : 14)
+    .margin({ top: this.isCompact() ? 10 : 16 })
   }
 
 
-  build() {
-    Scroll() {
+  // -------------------------------------------------------------------------
+  // 响应式页面骨架：单屏/双屏单列，三屏/平板/2in1 双列
+  // -------------------------------------------------------------------------
+
+  @Builder
+  private pageHeader() {
+    Text('CoherencyLatency')
+      .fontSize(this.isCompact() ? (this.roundScreen ? 19 : 17) : 27)
+      .fontWeight(FontWeight.Bold)
+      .fontColor(this.textPrimary())
+      .textAlign(this.isCompact() ? TextAlign.Center : TextAlign.Start)
+      .width('100%')
+    Text(this.isCompact() && this.roundScreen ? '缓存一致性延迟测试' : '缓存一致性延迟测试 · HarmonyOS 原生版')
+      .fontSize(this.isCompact() ? (this.roundScreen ? 10 : 9.5) : 13)
+      .fontColor(this.textSecondary())
+      .textAlign(this.isCompact() ? TextAlign.Center : TextAlign.Start)
+      .margin({ top: 2 })
+      .width('100%')
+  }
+
+  @Builder
+  private actionSection() {
+    Row() {
+      Button(this.running ? '测试中…' : '开始测试')
+        .fontSize(this.isCompact() ? 14 : 15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+        .backgroundColor(this.accentColor())
+        .borderRadius(12)
+        .height(this.btnHeight())
+        .layoutWeight(this.isCompact() ? 3 : 2)
+        .id('btn_start')
+        .border({ width: this.tvMode && this.focusKey === 'start' ? 3 : 0, color: '#FFFFFF' })
+        .focusable(this.tvMode)
+        .defaultFocus(this.tvMode)
+        .focusBox({ strokeWidth: LengthMetrics.vp(3), strokeColor: ColorMetrics.numeric(0xFFFFFFFF), margin: LengthMetrics.vp(4) })
+        .onFocus(() => { this.focusKey = 'start'; })
+        .enabled(!this.running && this.n >= 2)
+        .opacity(this.running || this.n < 2 ? 0.45 : 1)
+        .onClick(() => {
+          this.startTest();
+        })
+
+      Button('停止')
+        .fontSize(this.isCompact() ? 13 : 15)
+        .padding(this.isCompact() ? { left: 2, right: 2 } : { left: 16, right: 16 })
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.textPrimary())
+        .backgroundColor(this.stopColor())
+        .borderRadius(12)
+        .border({ width: this.tvMode && this.focusKey === 'stop' ? 3 : 1, color: this.tvMode && this.focusKey === 'stop' ? '#FFFFFF' : this.lineColor() })
+        .height(this.btnHeight())
+        .layoutWeight(this.isCompact() ? 2 : 1)
+        .margin({ left: 10 })
+        .id('btn_stop')
+        .focusable(this.tvMode)
+        .focusBox({ strokeWidth: LengthMetrics.vp(3), strokeColor: ColorMetrics.numeric(0xFFFFFFFF), margin: LengthMetrics.vp(4) })
+        .onFocus(() => { this.focusKey = 'stop'; })
+        .enabled(this.running)
+        .opacity(this.running ? 1 : 0.5)
+        .onClick(() => {
+          this.stopTest();
+        })
+    }
+    .width('100%')
+    .margin({ top: this.isCompact() ? 10 : 16 })
+
+    Stack({ alignContent: Alignment.Start }) {
+      Progress({ value: this.donePairs, total: Math.max(1, this.totalPairs), type: ProgressType.Linear })
+        .color(this.accentColor())
+        .backgroundColor(this.lineColor())
+        .height(6)
+        .width('100%')
+      if (this.running) {
+        // 测试进行中保持界面持续出帧。部分设备的电源/调度策略会把长时间
+        // 静止的窗口当成空闲，并在此时收紧绑核窗口；displaySync 以 120 fps
+        // 主动请求 vsync，同时每次回调都改变一个真实绘制的极小文本，确保
+        // 系统看到的是持续动画而不是静止窗口，用户不必靠手指滑动来维持。
+        Text(this.framePulse.toString())
+          .fontSize(1)
+          .width(1)
+          .height(1)
+          .opacity(0.02)
+          .position({ x: 0, y: 0 })
+      }
+    }
+    .height(6)
+    .width('100%')
+    .margin({ top: 18 })
+
+    Text(this.statusText)
+      .fontSize(this.isCompact() ? 11 : 12.5)
+      .fontColor(this.textSecondary())
+      .textAlign(TextAlign.Start)
+      .margin({ top: this.isCompact() ? 6 : 8 })
+      .width('100%')
+
+    if (this.tvMode) {
+      Text('遥控器：方向键移动焦点 · OK 键确认')
+        .fontSize(11.5)
+        .fontColor(this.textTertiary())
+        .margin({ top: 4 })
+        .width('100%')
+    }
+  }
+
+  @Builder
+  private exportSection() {
+    Row() {
+      Button('复制 CSV')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.accentColor())
+        .backgroundColor(this.cardColor())
+        .borderRadius(12)
+        .border({ width: this.tvMode && this.focusKey === 'csv' ? 3 : 1, color: this.tvMode && this.focusKey === 'csv' ? '#FFFFFF' : this.accentBorder() })
+        .height(this.btnHeight())
+        .layoutWeight(1)
+        .id('btn_csv')
+        .focusable(this.tvMode)
+        .focusBox({ strokeWidth: LengthMetrics.vp(3), strokeColor: ColorMetrics.numeric(0xFFFFFFFF), margin: LengthMetrics.vp(4) })
+        .onFocus(() => { this.focusKey = 'csv'; })
+        .enabled(this.hasResult && !this.running)
+        .opacity(this.hasResult && !this.running ? 1 : 0.5)
+        .onClick(() => {
+          this.copyCsv();
+        })
+
+      Button('另存一份')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.accentDark())
+        .backgroundColor(this.cardColor())
+        .borderRadius(12)
+        .border({ width: this.tvMode && this.focusKey === 'save' ? 3 : 1, color: this.tvMode && this.focusKey === 'save' ? '#FFFFFF' : this.accentBorder() })
+        .height(this.btnHeight())
+        .layoutWeight(1)
+        .margin({ left: 10 })
+        .id('btn_save')
+        .focusable(this.tvMode)
+        .focusBox({ strokeWidth: LengthMetrics.vp(3), strokeColor: ColorMetrics.numeric(0xFFFFFFFF), margin: LengthMetrics.vp(4) })
+        .onFocus(() => { this.focusKey = 'save'; })
+        .enabled(this.hasResult && !this.running)
+        .opacity(this.hasResult && !this.running ? 1 : 0.5)
+        .onClick(() => {
+          this.exportAgain();
+        })
+    }
+    .width('100%')
+    .margin({ top: 12 })
+
+    Text(this.savedMessage)
+      .fontSize(11.5)
+      .fontColor(this.textTertiary())
+      .margin({ top: 6 })
+      .width('100%')
+
+    Text('数值是每次原子操作的往返延迟，越低越好。导出后可导入表格软件。')
+      .fontSize(11.5)
+      .fontColor(this.textTertiary())
+      .margin({ top: 18 })
+      .width('100%')
+  }
+
+  @Builder
+  private footerSection() {
+    Row() {
+      Text('关于')
+        .fontSize(12)
+        .fontColor(this.textSecondary())
+        .focusable(this.tvMode)
+        .focusBox({ strokeWidth: LengthMetrics.vp(2), strokeColor: ColorMetrics.numeric(0xFFFFFFFF), margin: LengthMetrics.vp(2) })
+        .onClick(() => {
+          this.aboutDlg = 1;
+        })
+      Text('·').fontSize(12).fontColor(this.textTertiary()).margin({ left: 8, right: 8 })
+      Text('开源许可')
+        .fontSize(12)
+        .fontColor(this.textSecondary())
+        .onClick(() => {
+          this.showFullLicense = false;
+          this.aboutDlg = 2;
+        })
+      Text('·').fontSize(12).fontColor(this.textTertiary()).margin({ left: 8, right: 8 })
+      Text('隐私说明')
+        .fontSize(12)
+        .fontColor(this.textSecondary())
+        .onClick(() => {
+          this.aboutDlg = 3;
+        })
+    }
+    .width('100%')
+    .margin({ top: 14 })
+
+    if (this.aboutDlg > 0) {
       Column() {
-        Text('CoherencyLatency')
-          .fontSize(27)
+        Text(this.aboutTitle())
+          .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.textPrimary())
           .width('100%')
-        Text('缓存一致性延迟测试 · HarmonyOS 原生版')
-          .fontSize(13)
-          .fontColor(this.textSecondary())
-          .margin({ top: 2 })
-          .width('100%')
-
-        this.infoCard()
-
-        Row() {
-          Button(this.running ? '测试中…' : '开始测试')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor('#FFFFFF')
-            .backgroundColor(this.accentColor())
-            .borderRadius(12)
-            .height(48)
-            .layoutWeight(2)
-            .enabled(!this.running && this.n >= 2)
-            .opacity(this.running || this.n < 2 ? 0.45 : 1)
-            .onClick(() => {
-              this.startTest();
-            })
-
-          Button('停止')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.textPrimary())
-            .backgroundColor(this.stopColor())
-            .borderRadius(12)
-            .border({ width: 1, color: this.lineColor() })
-            .height(48)
-            .layoutWeight(1)
-            .margin({ left: 10 })
-            .enabled(this.running)
-            .opacity(this.running ? 1 : 0.5)
-            .onClick(() => {
-              this.stopTest();
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-
-        Stack({ alignContent: Alignment.Start }) {
-          Progress({ value: this.donePairs, total: Math.max(1, this.totalPairs), type: ProgressType.Linear })
-            .color(this.accentColor())
-            .backgroundColor(this.lineColor())
-            .height(6)
-            .width('100%')
-          if (this.running) {
-            // 测试进行中保持界面持续出帧。部分设备的电源/调度策略会把长时间
-            // 静止的窗口当成空闲，并在此时收紧绑核窗口；让这一层动画常驻并
-            // 真正绘制（尺寸为 0 时会被裁掉、不再产帧），界面就不会进入那种
-            // 状态，用户不必靠手指滑动来维持。
-            LoadingProgress()
-              .width(3)
-              .height(3)
-              .opacity(0.01)
+        Scroll() {
+          Column() {
+            Text(this.aboutDlg === 2 && !this.showFullLicense ?
+              this.aboutBody().split('\n\n').slice(0, 1).join('\n\n') + '\n\n' +
+              'Copyright (c) 2021 CapFrameX\n\n' +
+              '本应用基于 MicroBenchX（MIT 许可）修改，许可全文见下。' : this.aboutBody())
+              .fontSize(12.5)
+              .fontColor(this.textPrimary())
+              .lineHeight(20)
+              .copyOption(CopyOptions.LocalDevice)
+              .width('100%')
+            if (this.aboutDlg === 2 && !this.showFullLicense) {
+              Button('展开许可全文')
+                .fontSize(13)
+                .height(36)
+                .margin({ top: 12 })
+                .onClick(() => {
+                  this.showFullLicense = true;
+                })
+            }
           }
-        }
-        .height(6)
-        .width('100%')
-        .margin({ top: 18 })
-
-        Text(this.statusText)
-          .fontSize(12.5)
-          .fontColor(this.textSecondary())
-          .margin({ top: 8 })
+          .alignItems(HorizontalAlign.Start)
           .width('100%')
-
-        this.matrixCard()
-
-        Row() {
-          Button('复制 CSV')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.accentColor())
-            .backgroundColor(this.cardColor())
-            .borderRadius(12)
-            .border({ width: 1, color: this.accentBorder() })
-            .height(48)
-            .layoutWeight(1)
-            .enabled(this.hasResult && !this.running)
-            .opacity(this.hasResult && !this.running ? 1 : 0.5)
-            .onClick(() => {
-              this.copyCsv();
-            })
-
-          Button('另存一份')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.accentDark())
-            .backgroundColor(this.cardColor())
-            .borderRadius(12)
-            .border({ width: 1, color: this.accentBorder() })
-            .height(48)
-            .layoutWeight(1)
-            .margin({ left: 10 })
-            .enabled(this.hasResult && !this.running)
-            .opacity(this.hasResult && !this.running ? 1 : 0.5)
-            .onClick(() => {
-              this.exportAgain();
-            })
         }
+        .layoutWeight(1)
         .width('100%')
         .margin({ top: 12 })
-
-        Text(this.savedMessage)
-          .fontSize(11.5)
-          .fontColor(this.textTertiary())
-          .margin({ top: 6 })
+        Button('关闭')
+          .fontSize(14)
           .width('100%')
-
-        Text('数值是每次原子操作的往返延迟，越低越好。导出后可导入表格软件。')
-          .fontSize(11.5)
-          .fontColor(this.textTertiary())
-          .margin({ top: 18 })
-          .width('100%')
+          .height(42)
+          .margin({ top: 12 })
+          .onClick(() => {
+            this.aboutDlg = 0;
+            this.showFullLicense = false;
+          })
       }
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: this.n >= 9 ? 10 : 16, right: this.n >= 9 ? 10 : 16, top: 18, bottom: 30 })
+      .padding(20)
       .width('100%')
+      .height(380)
+      .backgroundColor(this.cardColor())
+      .borderRadius(14)
+      .border({ width: 1, color: this.darkMode ? '#2A2E35' : '#E4E7EC' })
+      .margin({ top: 14 })
     }
-    .scrollBar(BarState.Auto)
+  }
+
+  @Builder
+  private narrowBody() {
+    Column() {
+      if (this.isCompact()) {
+        // 圆形表盘：先给主操作，再给矩阵，设备信息后置，避免一屏只见说明。
+        this.actionSection()
+        this.matrixCard()
+        this.infoCard()
+      } else {
+        this.infoCard()
+        this.actionSection()
+        this.matrixCard()
+      }
+      this.exportSection()
+      this.footerSection()
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private wideBody() {
+    Row() {
+      Column() {
+        this.infoCard()
+        this.actionSection()
+        this.exportSection()
+        this.footerSection()
+      }
+      .layoutWeight(1)
+      .constraintSize({ maxWidth: 440 })
+      .alignItems(HorizontalAlign.Start)
+
+      Column() {
+        this.matrixCard()
+      }
+      .layoutWeight(2)
+      .margin({ left: 24 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+  }
+
+  build() {
+    Row() {
+      Scroll(this.scroller) {
+        Column() {
+          this.pageHeader()
+          if (this.isWide()) {
+            this.wideBody()
+          } else {
+            this.narrowBody()
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
+        .padding({
+          left: this.isCompact() ? this.watchPadding() : (this.isWide() ? 24 : (this.n >= 9 ? 10 : 16)),
+          right: this.isCompact() ? this.watchPadding() : (this.isWide() ? 24 : (this.n >= 9 ? 10 : 16)),
+          top: this.isCompact() ? (this.roundScreen ? 26 : 14) : 18,
+          bottom: this.isCompact() ? (this.roundScreen ? 30 : 18) : 30
+        })
+      }
+      .width('100%')
+      .height('100%')
+      .constraintSize({ maxWidth: this.isWide() ? 1180 : 620 })
+      .scrollBar(BarState.Auto)
+    }
     .width('100%')
     .height('100%')
+    .justifyContent(FlexAlign.Center)
     .backgroundColor(this.bgColor())
+    .onKeyEvent((event: KeyEvent) => {
+      if (this.tvMode && event.type === KeyType.Down) {
+        this.onTvKey(event.keyCode);
+      }
+    })
+    .onAreaChange((oldValue: Area, newValue: Area) => {
+      const width: number = Number(newValue.width);
+      if (!Number.isNaN(width) && width > 0) {
+        this.pendingWidth = width;
+        if (this.resizeTimer !== -1) {
+          clearTimeout(this.resizeTimer);
+        }
+        this.resizeTimer = setTimeout(() => {
+          this.viewWidth = this.pendingWidth;
+          this.resizeTimer = -1;
+        }, 150);
+      }
+    })
   }
 }
