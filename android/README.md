@@ -35,7 +35,7 @@ Java 层只负责固定参数、进度回调和矩阵显示。成品 `CoherencyL
 - 不申请任何权限（包括网络权限），不需要 root。
 
 **多形态适配。** 同一份 APK（versionCode 5，533,655 B，SHA-256
-`060e8dbda2bcfb83bcba9027b882c922119c558bf2adaa3ebff3abd21cc31e56`）在四种形态下自动切换布局：
+`9f6d3c9ad0fc02140ae48a974931358b3beaf3ccfe2c568415a8f32e563db31f`）在四种形态下自动切换布局：
 
 | 形态 | 判定 | 布局 |
 | --- | --- | --- |
