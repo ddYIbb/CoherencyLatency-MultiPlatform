@@ -19,13 +19,13 @@ None of the downloads requires installing any runtime — copy it over and it ru
 
 | Platform | Release asset | Minimum OS | Supported CPUs / instruction sets |
 |---|---|---|---|
-| macOS | `CoherencyLatency-macOS-v1.2.0.zip` | Intel Mac: macOS 10.7 Lion (2011); Apple Silicon Mac: macOS 11.0 Big Sur (2020) | A single Universal 2 executable containing both x86_64 and arm64 slices (covers M1/M2/M3/M4); no need to pick a version |
-| macOS (GUI) | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac: macOS 10.10 Yosemite (2014); Apple Silicon Mac: macOS 11.0 | Native AppKit UI in one Universal 2 program (x86_64 + arm64), shipping both a `.app` bundle and a standalone executable |
-| Windows | `CoherencyLatency-Windows-v1.2.0.exe` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | A single-file launcher that auto-matches native x86, x64 and ARM64 payloads; the x86 build targets the plain 32-bit baseline (SSE2 not even required), x64/ARM64 use their base instruction sets |
-| Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
-| Android (CLI) | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
-| Android (GUI) | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
-| HarmonyOS | CoherencyLatency-HarmonyOS-v1.2.0.zip (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phone, foldable, wide-fold, tri-fold, tablet, 2-in-1, TV, round/square watch, and car head unit (11 device classes tested); detects 2-20 logical threads at runtime |
+| macOS | `CoherencyLatency-macOS-v1.3.0.zip` | Intel Mac: macOS 10.7 Lion (2011); Apple Silicon Mac: macOS 11.0 Big Sur (2020) | A single Universal 2 executable containing both x86_64 and arm64 slices (covers M1/M2/M3/M4); no need to pick a version |
+| macOS (GUI) | `CoherencyLatency-macOS-GUI-v1.3.0.zip` | Intel Mac: macOS 10.10 Yosemite (2014); Apple Silicon Mac: macOS 11.0 | Native AppKit UI in one Universal 2 program (x86_64 + arm64), shipping both a `.app` bundle and a standalone executable |
+| Windows | `CoherencyLatency-Windows-v1.3.0.exe` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | A single-file launcher that auto-matches native x86, x64 and ARM64 payloads; the x86 build targets the plain 32-bit baseline (SSE2 not even required), x64/ARM64 use their base instruction sets |
+| Windows (GUI) | `CoherencyLatency-Windows-GUI-v1.3.0.zip` | x86 / x64: Windows Vista SP2 (2009); ARM64: Windows 10 | Native Win32 UI that follows the system dark mode and accent colour; the same single-file launcher auto-matches x86, x64 and ARM64 |
+| Android (CLI) | `CoherencyLatency-Android-v1.3.0.zip` | Android 4.1 (API 16) | Four standalone executables: arm64-v8a / armv7 / x86 / x86_64; run from Termux or `adb shell` |
+| Android (GUI) | `CoherencyLatency-Android-UI-v1.3.0.apk` | Android 4.1 (API 16) | One APK containing arm64-v8a, armv7, x86 and x86_64 native libraries; works on phones, tablets, round watches and Android TV |
+| HarmonyOS | CoherencyLatency-HarmonyOS-v1.3.0.zip (unsigned HAP) | HarmonyOS 5.0.0 (API 12) | arm64-v8a devices / x86_64 emulator; phone, foldable, wide-fold, tri-fold, tablet, 2-in-1, TV, round/square watch, and car head unit (11 device classes tested); detects 2-20 logical threads at runtime |
 
 Notes:
 
@@ -43,19 +43,19 @@ Notes:
 
 ## Download
 
-Latest release: [v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0) — one version number across macOS / Windows / Android / HarmonyOS:
+Latest release: [v1.3.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.3.0) — one version number across macOS / Windows / Android / HarmonyOS:
 
-**2026-11-26 adaptation update**: HarmonyOS build tested on 11 device classes (phone / Mate X7 foldable / Pura X Max wide-fold / TripleFold tri-fold / tablet / 2in1 / folding 2in1 / TV / round watch / square watch / car). TV and car support D-pad focus + OK key. Android UI version now draws the result matrix with cell-background heat colors (consistent with Windows/macOS/HarmonyOS). Engine gains a spin-limit + micro-sleep wait strategy on all platforms.
+**v1.3.0 changes**: fixed random `N/A` cells in the Windows GUI 32-thread matrix (pin failures now retry with a conservative wait; 32×32 full-matrix runs report 0 `N/A`, GUI and CLI both averaging 63.6 ns); added a timer-resolution guard on ARM (when the local clock ticks slower than 10 ns, the direction-aggregation step is skipped and the window measurement is kept, avoiding wrong results for SMT sibling pairs; x86 behaviour unchanged); the Android GUI now paints the result matrix with cell-background heat colours like Windows / macOS / HarmonyOS; Windows / macOS GUIs hide row/column thread labels when cells get too small; HarmonyOS tested on 11 device classes (phone / Mate X7 foldable / Pura X Max wide-fold / TripleFold tri-fold / tablet / 2in1 / folding 2in1 / TV / round watch / square watch / car) with D-pad focus + OK key on TV and car; macOS GUI fixed a missing fail-colour definition; "unmeasured" (`·`) and "pin failed" (`N/A`) semantics unified across platforms; Android versionCode 6, HarmonyOS versionCode 1000300.
 
 | Platform | Release asset |
 |---|---|
-| macOS | [CoherencyLatency-macOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-v1.2.0.zip) |
-| macOS (GUI) | [CoherencyLatency-macOS-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-GUI-v1.2.0.zip) |
-| Windows | [CoherencyLatency-Windows-v1.2.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-v1.2.0.exe) |
-| Windows (GUI) | [CoherencyLatency-Windows-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-GUI-v1.2.0.zip) |
-| Android (CLI) | [CoherencyLatency-Android-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-v1.2.0.zip) |
-| Android (GUI) | [CoherencyLatency-Android-UI-v1.2.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-UI-v1.2.0.apk) |
-| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-HarmonyOS-v1.2.0.zip) |
+| macOS | [CoherencyLatency-macOS-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-macOS-v1.3.0.zip) |
+| macOS (GUI) | [CoherencyLatency-macOS-GUI-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-macOS-GUI-v1.3.0.zip) |
+| Windows | [CoherencyLatency-Windows-v1.3.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Windows-v1.3.0.exe) |
+| Windows (GUI) | [CoherencyLatency-Windows-GUI-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Windows-GUI-v1.3.0.zip) |
+| Android (CLI) | [CoherencyLatency-Android-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Android-v1.3.0.zip) |
+| Android (GUI) | [CoherencyLatency-Android-UI-v1.3.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Android-UI-v1.3.0.apk) |
+| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-HarmonyOS-v1.3.0.zip) |
 
 The macOS download is a zip containing a native executable. If Gatekeeper blocks the first launch, right-click the file and choose **Open**, or remove the quarantine attribute with `xattr -dr com.apple.quarantine CoherencyLatency`.
 
