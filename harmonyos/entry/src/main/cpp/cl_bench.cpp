@@ -76,6 +76,14 @@ struct StartGate {
     // Both edges of every sample are stamped by the workers themselves.
     std::uint64_t round_start[2] = {0, 0};
     std::uint64_t round_end[2] = {0, 0};
+    // Stamp-counter window around the round, taken by the main thread on both
+    // sides of the round_go release (spec 9A).  cntvct is global, so the ratio
+    // of the worker window to this window converts stamp ticks to nanoseconds.
+    std::uint64_t round_ticks_begin[2] = {0, 0};
+    std::uint64_t round_ticks_end[2] = {0, 0};
+    // Per-round core clock of each worker, measured before the round starts
+    // (spec ②).  Rounds recorded while a cluster is still ramping are dropped.
+    std::uint32_t round_mhz[2] = {0, 0};
     // Where each worker really ran during that round (kernel CPU number).
     int round_landing[2] = {-1, -1};
     // Core clock measured immediately before and immediately after the round.
@@ -114,6 +122,11 @@ struct ThreadConfig {
     std::atomic<bool> affinity_ok{false};
     std::atomic<bool> placement_ok{true};
     std::atomic<int> tid{0};
+    // Spec 9A: per-hand-off stamp buffer for this round and its capacity.
+    // Null disables stamping; the worker writes one entry per successful
+    // store, so the capacity must be at least the round's iteration count.
+    std::uint64_t* stamps = nullptr;
+    std::uint64_t stamp_capacity = 0;
     // Where the worker actually ended up, plus why the pin failed.
     int landing_cpu = -1;
     int pin_attempts = 0;
@@ -128,6 +141,29 @@ std::uint64_t now_ns() {
                static_cast<std::uint64_t>(ts.tv_nsec);
     }
     return 0;
+}
+
+// Fine-grained timestamp used to pair individual hand-offs inside a round
+// (spec 9A).  On ARM the architected virtual counter is global - every core
+// reads the same value - so stamps taken on two different cores can be
+// subtracted directly.  Its resolution depends on the SoC counter frequency;
+// run_pair converts a full round of stamps into nanoseconds and keeps the
+// direction values only when the counter is fine enough to resolve a single
+// hand-off.  A coarser counter simply leaves the feature off and the cell
+// falls back to the window value, exactly like before this change.
+inline std::uint64_t cl_stamp() {
+#if defined(__aarch64__) || defined(__arm__)
+    std::uint64_t value = 0;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#elif defined(__x86_64__) || defined(__i386__)
+    std::uint32_t lo = 0;
+    std::uint32_t hi = 0;
+    __asm__ __volatile__("lfence; rdtsc" : "=a"(lo), "=d"(hi));
+    return (static_cast<std::uint64_t>(hi) << 32) | lo;
+#else
+    return now_ns();
+#endif
 }
 
 // Pause/yield instructions the main thread spends on a round before it falls
@@ -1235,6 +1271,8 @@ std::vector<int> probe_pinnable_cores() {
 
 void bounce_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& target = config->target->value;
+    std::uint64_t* const stamps = config->stamps;
+    const std::uint64_t stamp_capacity = config->stamp_capacity;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
 
@@ -1243,6 +1281,15 @@ void bounce_worker(ThreadConfig* config) {
         if (target.compare_exchange_strong(expected, current,
                                            std::memory_order_seq_cst,
                                            std::memory_order_seq_cst)) {
+            // Spec 9A: stamp right after the successful store.  The store
+            // index (current-start)/2 pairs with the partner's store of the
+            // same exchange, so the per-hand-off delay can be reconstructed.
+            if (stamps != nullptr) {
+                const std::uint64_t stored = (current - config->start) / 2;
+                if (stored < stamp_capacity) {
+                    stamps[stored] = cl_stamp();
+                }
+            }
             current += 2;
         }
     }
@@ -1251,12 +1298,20 @@ void bounce_worker(ThreadConfig* config) {
 void owned_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& read_target = config->read_target->value;
     std::atomic<std::uint64_t>& target = config->target->value;
+    std::uint64_t* const stamps = config->stamps;
+    const std::uint64_t stamp_capacity = config->stamp_capacity;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
 
     while (current <= limit) {
         if (read_target.load(std::memory_order_acquire) == current - 1) {
             target.store(current, std::memory_order_release);
+            if (stamps != nullptr) {
+                const std::uint64_t stored = (current - config->start) / 2;
+                if (stored < stamp_capacity) {
+                    stamps[stored] = cl_stamp();
+                }
+            }
             current += 2;
         }
     }
@@ -1449,6 +1504,10 @@ private:
             // The sample starts where the work starts and ends where the work
             // ends, so the main thread's own scheduling delay never enters the
             // measurement.
+            // Spec ②: read this core's clock before the window so rounds that
+            // ran on a still-ramping cluster can be dropped during aggregation.
+            // The read (~7 µs) happens outside the timed window on purpose.
+            gate->round_mhz[config->slot] = measure_core_mhz();
             gate->round_start[config->slot] = now_ns();
             data->function(config);
             gate->round_end[config->slot] = now_ns();
@@ -1750,6 +1809,22 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
     config2.slot = 1;
     config2.gate = &gate;
 
+    // Spec 9A: per-hand-off stamps.  Small iteration counts have no room to
+    // separate the stamp overhead from the hand-off, and huge ones would need
+    // buffers beyond what this function should allocate, so stamp only inside
+    // a sane range; everything outside falls back to the window value.
+    const bool use_stamps = iterations >= 8 && iterations <= (1ULL << 22);
+    std::vector<std::uint64_t> stamps1;
+    std::vector<std::uint64_t> stamps2;
+    if (use_stamps) {
+        stamps1.assign(static_cast<std::size_t>(iterations), 0);
+        stamps2.assign(static_cast<std::size_t>(iterations), 0);
+        config1.stamps = stamps1.data();
+        config1.stamp_capacity = iterations;
+        config2.stamps = stamps2.data();
+        config2.stamp_capacity = iterations;
+    }
+
     WorkerThread thread1;
     WorkerThread thread2;
     const WorkerFunction worker = owned_mode ? owned_worker : bounce_worker;
@@ -1949,6 +2024,31 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
         // exactly what made some cells swing between runs.
         std::vector<std::pair<int, int>> landings;
         landings.reserve(static_cast<std::size_t>(config1.rounds));
+        // Spec 9A/①/② collection: per-round forward/backward hop averages,
+        // the window sample each was derived from, the round's minimum worker
+        // clock and the landing pair - filled only for rounds whose stamp
+        // aggregate passed the guard above.
+        std::vector<float> round_forward;
+        std::vector<float> round_backward;
+        std::vector<float> round_window;
+        std::vector<std::uint32_t> round_mhz_min;
+        std::vector<std::pair<int, int>> round_landing_pair;
+        std::vector<double> round_tick_ns;
+        // Spec ①/② collection for the window value: every kept round's
+        // sample, landing pair and minimum worker clock, independent of the
+        // stamp path so the aggregation below works with stamps disabled too.
+        std::vector<float> kept_samples;
+        std::vector<std::pair<int, int>> kept_landings;
+        std::vector<std::uint32_t> kept_mhz_min;
+        round_forward.reserve(static_cast<std::size_t>(config1.rounds));
+        round_backward.reserve(static_cast<std::size_t>(config1.rounds));
+        round_window.reserve(static_cast<std::size_t>(config1.rounds));
+        round_mhz_min.reserve(static_cast<std::size_t>(config1.rounds));
+        round_landing_pair.reserve(static_cast<std::size_t>(config1.rounds));
+        round_tick_ns.reserve(static_cast<std::size_t>(config1.rounds));
+        kept_samples.reserve(static_cast<std::size_t>(config1.rounds));
+        kept_landings.reserve(static_cast<std::size_t>(config1.rounds));
+        kept_mhz_min.reserve(static_cast<std::size_t>(config1.rounds));
         const auto expected_landing = [&](int slot) {
             if (slot == 0) {
                 return exact1 >= 0 ? exact1 : processor1;
@@ -1973,9 +2073,16 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
             gate.round_end[1] = 0;
             gate.round_landing[0] = -1;
             gate.round_landing[1] = -1;
+            gate.round_mhz[0] = 0;
+            gate.round_mhz[1] = 0;
             const int violations_before =
                 monitor_violations.load(std::memory_order_acquire);
 
+            // Spec 9A: bracket the round in stamp ticks from the main thread.
+            // The worker window sits inside this bracket, and the bracket is
+            // what converts ticks to nanoseconds (see the aggregation below).
+            const std::uint64_t ticks_begin =
+                use_stamps ? cl_stamp() : 0;
             gate.round_go.store(round + 1, std::memory_order_release);
             // A round of "iterations" bounce exchanges takes roughly
             // 2 * iterations * latency.  On this SoC the small cores are several
@@ -2019,6 +2126,7 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
             // Both edges come from the workers, so the window contains the
             // work and nothing but the work: no main-thread wake-up delay at
             // either end.
+            const std::uint64_t ticks_end = use_stamps ? cl_stamp() : 0;
             const std::uint64_t start =
                 gate.round_start[0] > gate.round_start[1] ? gate.round_start[0]
                                                           : gate.round_start[1];
@@ -2060,6 +2168,127 @@ PairOutcome run_pair(int processor1, int processor2, int mask1, int mask2,
                     samples.push_back(sample_ns);
                     landings.emplace_back(gate.round_landing[0],
                                           gate.round_landing[1]);
+                    if (use_stamps) {
+                        // Spec 9A: reconstruct the two per-hand-off directions
+                        // from this round's stamps.  Worker 1 stamps its k-th
+                        // store into stamps1[k], worker 2 into stamps2[k]; the
+                        // bounce chain alternates w1,w2,w1,w2..., so hop
+                        // w1->w2 pairs stamps2[k]-stamps1[k] and the return
+                        // hop pairs stamps1[k+1]-stamps2[k].  The owned chain
+                        // runs w2,w1,w2,w1..., so the pairings swap.  Stamps
+                        // are collected in ns-per-tick units and scaled by the
+                        // round's own ticks-to-ns factor below.
+                        const std::size_t count =
+                            static_cast<std::size_t>(iterations);
+                        const double ticks_used =
+                            static_cast<double>(ticks_end) -
+                            static_cast<double>(ticks_begin);
+                        const double ns_per_tick =
+                            ticks_used > 0.0
+                                ? (static_cast<double>(end - start) /
+                                   ticks_used)
+                                : 0.0;
+                        bool sum_direction_trusted = true;
+                        if (ns_per_tick > 10.0) {
+                            // Low-resolution timer (e.g. ARM arch_timer at
+                            // 19.2 MHz, ~52 ns/tick): stamp pairs cannot
+                            // resolve same-core hand-offs reliably, so skip
+                            // direction aggregation for this round; window
+                            // values still fill the matrix.
+                            sum_direction_trusted = false;
+                        }
+                        double sum_forward = 0.0;
+                        double sum_backward = 0.0;
+                        std::size_t cf = 0;
+                        std::size_t cb = 0;
+                        const std::uint64_t* s1 = stamps1.data();
+                        const std::uint64_t* s2 = stamps2.data();
+                        if (!owned_mode) {
+                            for (std::size_t k = 0; k < count; ++k) {
+                                const std::uint64_t later = s2[k];
+                                const std::uint64_t earlier = s1[k];
+                                if (later > earlier) {
+                                    const double hop =
+                                        static_cast<double>(later - earlier) *
+                                        ns_per_tick;
+                                    if (hop > 0.0 && hop < 100000.0) {
+                                        sum_forward += hop;
+                                        ++cf;
+                                    }
+                                }
+                            }
+                            for (std::size_t k = 0; k + 1 < count; ++k) {
+                                const std::uint64_t later = s1[k + 1];
+                                const std::uint64_t earlier = s2[k];
+                                if (later > earlier) {
+                                    const double hop =
+                                        static_cast<double>(later - earlier) *
+                                        ns_per_tick;
+                                    if (hop > 0.0 && hop < 100000.0) {
+                                        sum_backward += hop;
+                                        ++cb;
+                                    }
+                                }
+                            }
+                        } else {
+                            for (std::size_t k = 0; k + 1 < count; ++k) {
+                                const std::uint64_t later = s2[k + 1];
+                                const std::uint64_t earlier = s1[k];
+                                if (later > earlier) {
+                                    const double hop =
+                                        static_cast<double>(later - earlier) *
+                                        ns_per_tick;
+                                    if (hop > 0.0 && hop < 100000.0) {
+                                        sum_forward += hop;
+                                        ++cf;
+                                    }
+                                }
+                            }
+                            for (std::size_t k = 0; k < count; ++k) {
+                                const std::uint64_t later = s1[k];
+                                const std::uint64_t earlier = s2[k];
+                                if (later > earlier) {
+                                    const double hop =
+                                        static_cast<double>(later - earlier) *
+                                        ns_per_tick;
+                                    if (hop > 0.0 && hop < 100000.0) {
+                                        sum_backward += hop;
+                                        ++cb;
+                                    }
+                                }
+                            }
+                        }
+                        const std::size_t half = count / 2;
+                        if (sum_direction_trusted && cf > half && cb > half) {
+                            const double avg_forward =
+                                sum_forward / static_cast<double>(cf);
+                            const double avg_backward =
+                                sum_backward / static_cast<double>(cb);
+                            // Guard: a round whose average hop sits far
+                            // outside the window-derived per-hand-off value
+                            // (stamp overhead, a lost pairing, an interrupt)
+                            // cannot be trusted; keep the window for it.  Both
+                            // directions are accepted or dropped together so
+                            // the per-round vectors stay index-aligned.
+                            if (avg_forward > 0.25 * sample_ns &&
+                                avg_forward < 4.0 * sample_ns &&
+                                avg_backward > 0.25 * sample_ns &&
+                                avg_backward < 4.0 * sample_ns) {
+                                round_forward.push_back(
+                                    static_cast<float>(avg_forward));
+                                round_backward.push_back(
+                                    static_cast<float>(avg_backward));
+                                round_window.push_back(sample_ns);
+                                round_mhz_min.push_back(
+                                    static_cast<std::uint32_t>(
+                                        std::min(gate.round_mhz[0],
+                                                 gate.round_mhz[1])));
+                                round_landing_pair.emplace_back(
+                                    gate.round_landing[0],
+                                    gate.round_landing[1]);
+                            }
+                        }
+                    }
                     if (kLogRounds &&
                         (cpu_topology().is_prime_physical(processor1) ||
                          cpu_topology().is_prime_physical(processor2))) {
@@ -2603,7 +2832,7 @@ void run_matrix(const std::vector<int>& cpus, const std::vector<int>& masks,
     // One run of a pair already measures the round trip in both directions
     // and divides the elapsed time by two.  The old loop measured the
     // transpose as a second, independent pair and then averaged the two;
-    // that duplicated every p7 retry for no accuracy gain.  Since 1.2.0 every
+    // that duplicated every p7 retry for no accuracy gain.  Since 1.3.0 every
     // ordered pair (i, j) is measured and recorded on its own: matrix[i][j]
     // and matrix[j][i] are two independent measurements and are neither
     // averaged nor copied into each other.
@@ -3316,7 +3545,7 @@ std::string architecture_name() {
 }
 
 napi_value GetVersion(napi_env env, napi_callback_info) {
-    return make_string(env, "1.2.0");
+    return make_string(env, "1.3.0");
 }
 
 // sysconf() in the OHOS sysroot has no _SC_LEVEL1_DCACHE_LINESIZE, so the
