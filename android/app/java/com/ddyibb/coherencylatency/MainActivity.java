@@ -16,9 +16,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.InputDevice;
@@ -108,9 +105,10 @@ public class MainActivity extends Activity {
     private static final byte CELL_DIAGONAL = 4;
 
     private ScrollView scrollView;
+    private View matrixCard;  // scrolled into view when a test starts
     private TextView infoText;
     private TextView statusText;
-    private TextView matrixText;
+    private HeatMatrixView matrixView;
     private TextView matrixCaption;
     private TextView matrixNote;
     private TextView savedText;
@@ -120,17 +118,10 @@ public class MainActivity extends Activity {
     private Button exportButton;
 
     private int logicalCores = 2;
+    private int smtPairs = 0;
     private int n = 2;
     private float[] live = new float[4];
 
-    /** Cached cell text for the matrix; entries are only re-formatted when their value changes. */
-    private int matrixCacheN = -1;
-    private int matrixCacheWidth = -1;
-    private String[] matrixCells;
-    private byte[] matrixCellKind;
-    private float[] matrixCellValue;
-    private String[] matrixColumnHeaders;
-    private String[] matrixRowHeaders;
     private int naPairs = 0;
 
     /** Progress updates are marshalled through one reusable Runnable (no per-pair allocation). */
@@ -490,25 +481,22 @@ public class MainActivity extends Activity {
     }
 
     private void addMatrix(LinearLayout parent, int topMarginDp) {
-        LinearLayout matrixCard = card(topMarginDp);
+        LinearLayout matrixCardView = card(topMarginDp);
+        matrixCard = matrixCardView;
         matrixCaption = sectionTitle("结果矩阵 · ns/op");
-        matrixCard.addView(matrixCaption);
+        matrixCardView.addView(matrixCaption);
 
         HorizontalScrollView hScroll = new HorizontalScrollView(this);
         hScroll.setHorizontalScrollBarEnabled(false);
         hScroll.setFocusable(false);
         LinearLayout.LayoutParams scrollParams = wrapParams();
         scrollParams.topMargin = dp(isWatch ? 6 : 8);
-        matrixCard.addView(hScroll, scrollParams);
+        matrixCardView.addView(hScroll, scrollParams);
 
-        matrixText = text("", isWatch ? 10f : 12.5f, textPrimary(), false);
-        matrixText.setTypeface(Typeface.MONOSPACE);
-        matrixText.setTextIsSelectable(false);
-        matrixText.setFocusable(false);
-        matrixText.setClickable(false);
-        matrixText.setLongClickable(false);
-        matrixText.setLineSpacing(dp(isWatch ? 3 : 5), 1.0f);
-        hScroll.addView(matrixText, new HorizontalScrollView.LayoutParams(
+        matrixView = new HeatMatrixView(this);
+        matrixView.configure(isWatch, uiScale, cellEmptyColor(), cellDiagonalColor(),
+                textSecondary(), textTertiary());
+        hScroll.addView(matrixView, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -517,8 +505,8 @@ public class MainActivity extends Activity {
         matrixNote.setVisibility(View.GONE);
         LinearLayout.LayoutParams noteParams = wrapParams();
         noteParams.topMargin = dp(6);
-        matrixCard.addView(matrixNote, noteParams);
-        parent.addView(matrixCard);
+        matrixCardView.addView(matrixNote, noteParams);
+        parent.addView(matrixCardView);
     }
 
     private void addExport(LinearLayout parent) {
@@ -578,11 +566,17 @@ public class MainActivity extends Activity {
             if (parts.length > 4) {
                 physical = safeInt(parts[4], 0);
             }
+            if (parts.length > 5) {
+                smtPairs = safeInt(parts[5], 0);
+            }
         }
         logical = Math.max(1, Math.min(logical, 32));
         String deviceLine = model + "\n" + logical + " 个逻辑核心";
         if (physical > 0) {
             deviceLine += " · " + physical + " 个物理核";
+        }
+        if (smtPairs > 0) {
+            deviceLine += " · 同核超线程 " + smtPairs + " 对";
         }
         deviceLine += " · " + cacheLine + " B 缓存行";
         if (!isWatch) {
@@ -629,6 +623,18 @@ public class MainActivity extends Activity {
         renderMatrix(false);
         setRunning(true);
 
+        // Auto-scroll the result matrix into view (mirrors the HarmonyOS port's
+        // behavior so the running matrix is visible without manual scrolling).
+        final android.view.View scrollTarget = matrixCard;
+        if (scrollTarget != null && !isTelevision) {
+            scrollView.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    scrollView.smoothScrollTo(0, scrollTarget.getTop());
+                }
+            }, 80);
+        }
+
         startMillis = SystemClock.elapsedRealtime();
         new Thread(new Runnable() {
             @Override
@@ -671,7 +677,7 @@ public class MainActivity extends Activity {
             donePairs = totalPairs;
             progressBar.setProgress(totalPairs);
             renderMatrix(true);
-            matrixCaption.setText("最终结果 · 双向平均 · ns/op");
+            matrixCaption.setText("最终结果 · 双向独立 · ns/op");
             final int naPairs = countNaPairs();
             if (naPairs > 0) {
                 statusText.setText(String.format(Locale.US,
@@ -749,16 +755,14 @@ public class MainActivity extends Activity {
     // -----------------------------------------------------------------------
 
     private void renderMatrix(boolean finalView) {
-        if (matrixText == null) {
+        if (matrixView == null) {
             return;
         }
         if (live == null || n <= 0 || live.length < n * n) {
-            matrixText.setText("");
+            matrixView.clear();
             naPairs = 0;
             return;
         }
-        final int columnWidth = isWatch ? 6 : isTelevision ? 8 : 7;
-        ensureMatrixCache(columnWidth);
 
         float min = Float.MAX_VALUE;
         float max = -Float.MAX_VALUE;
@@ -784,139 +788,38 @@ public class MainActivity extends Activity {
         }
         naPairs = naCount;
         final boolean flat = !(max - min >= 1e-6f);
-
-        StringBuilder builder = new StringBuilder(
-                n * (6 + n * columnWidth + 1) + 8);
-        builder.append("      ");
-        for (int column = 0; column < n; ++column) {
-            builder.append(matrixColumnHeaders[column]);
-        }
-        builder.append('\n');
-        for (int row = 0; row < n; ++row) {
-            builder.append(matrixRowHeaders[row]);
-            int base = row * n;
-            for (int column = 0; column < n; ++column) {
-                int index = base + column;
-                if (row == column) {
-                    if (matrixCellKind[index] != CELL_DIAGONAL) {
-                        matrixCells[index] = padLeft("x", columnWidth);
-                        matrixCellKind[index] = CELL_DIAGONAL;
-                    }
-                } else {
-                    float value = live[index];
-                    byte kind;
-                    if (value != value) {
-                        kind = CELL_NA;
-                    } else if (value <= 0f) {
-                        kind = CELL_PENDING;
-                    } else {
-                        kind = CELL_VALUE;
-                    }
-                    // Re-format only cells whose displayed value changed: the
-                    // per-pair render used to run n*n String.format calls.
-                    if (matrixCellKind[index] != kind
-                            || (kind == CELL_VALUE && Float.floatToIntBits(
-                                    matrixCellValue[index]) != Float.floatToIntBits(value))) {
-                        if (kind == CELL_VALUE) {
-                            matrixCells[index] = padLeft(formatTenths(value), columnWidth);
-                        } else if (kind == CELL_NA) {
-                            matrixCells[index] = padLeft("N/A", columnWidth);
-                        } else {
-                            matrixCells[index] = padLeft("·", columnWidth);
-                        }
-                        matrixCellKind[index] = kind;
-                        matrixCellValue[index] = value;
-                    }
-                }
-                builder.append(matrixCells[index]);
-            }
-            builder.append('\n');
-        }
-
-        SpannableString text = new SpannableString(builder.toString());
-        int rowStride = 6 + n * columnWidth + 1;
-        int rowStart = rowStride;
-        for (int row = 0; row < n; ++row) {
-            int base = row * n;
-            for (int column = 0; column < n; ++column) {
-                int index = base + column;
-                int start = rowStart + 6 + column * columnWidth;
-                int end = start + columnWidth;
-                byte kind = matrixCellKind[index];
-                if (kind == CELL_VALUE) {
-                    int color = flat ? HEAT_GREEN : heatColor(live[index], min, max);
-                    text.setSpan(new ForegroundColorSpan(color), start, end,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                } else if (kind == CELL_DIAGONAL || kind == CELL_PENDING
-                        || kind == CELL_NA) {
-                    text.setSpan(new ForegroundColorSpan(textSecondary()), start, end,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                }
-            }
-            rowStart += rowStride;
-        }
-        matrixText.setText(text);
+        matrixView.setData(live, n, min, max, flat);
         updateMatrixNote();
     }
 
-    /** (Re)builds the per-cell text cache when the core count or layout changes. */
-    private void ensureMatrixCache(int columnWidth) {
-        if (matrixCacheN == n && matrixCacheWidth == columnWidth
-                && matrixCells != null) {
-            return;
-        }
-        matrixCacheN = n;
-        matrixCacheWidth = columnWidth;
-        int cells = n * n;
-        matrixCells = new String[cells];
-        matrixCellKind = new byte[cells];
-        matrixCellValue = new float[cells];
-        matrixColumnHeaders = new String[n];
-        matrixRowHeaders = new String[n];
-        for (int i = 0; i < n; ++i) {
-            matrixColumnHeaders[i] = padLeft("C" + i, columnWidth);
-            matrixRowHeaders[i] = padRight("C" + i, 6);
-        }
-    }
-
-    /** Green -> orange -> red interpolation used by the matrix heat map. */
-    private static int heatColor(float value, float min, float max) {
-        if (!(max - min >= 1e-6f)) {
-            return HEAT_GREEN;
-        }
-        float t = (value - min) / (max - min);
-        if (t < 0f) {
-            t = 0f;
-        } else if (t > 1f) {
-            t = 1f;
-        }
-        final int from;
-        final int to;
-        final float k;
-        if (t <= 0.5f) {
-            from = HEAT_GREEN;
-            to = HEAT_ORANGE;
-            k = t * 2f;
-        } else {
-            from = HEAT_ORANGE;
-            to = HEAT_RED;
-            k = (t - 0.5f) * 2f;
-        }
-        int red = Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * k);
-        int green = Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * k);
-        int blue = Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * k);
-        return Color.rgb(red, green, blue);
-    }
-
+    /** Number of measured-pair slots that finished as N/A (affinity failure). */
     private int countNaPairs() {
-        return naPairs;
+        int count = 0;
+        if (live == null || n <= 0 || live.length < n * n) {
+            return 0;
+        }
+        for (int row = 0; row < n; ++row) {
+            int base = row * n;
+            for (int column = 0; column < n; ++column) {
+                if (row != column && live[base + column] != live[base + column]) {
+                    ++count;
+                }
+            }
+        }
+        return count;
     }
 
+    /** Shows the N/A legend only when at least one pair could not be pinned. */
     private void updateMatrixNote() {
         if (matrixNote == null) {
             return;
         }
-        matrixNote.setVisibility(naPairs > 0 ? View.VISIBLE : View.GONE);
+        if (naPairs > 0) {
+            matrixNote.setText("N/A = 该核心对未能绑定到指定 CPU（" + naPairs + " 个）");
+            matrixNote.setVisibility(View.VISIBLE);
+        } else {
+            matrixNote.setVisibility(View.GONE);
+        }
     }
 
     private static String padLeft(String value, int width) {
@@ -1234,6 +1137,16 @@ public class MainActivity extends Activity {
 
     private int stopBackground() {
         return darkMode ? DARK_STOP_BACKGROUND : STOP_BACKGROUND;
+    }
+
+    /** Empty (not measured yet) matrix cell. */
+    private int cellEmptyColor() {
+        return darkMode ? 0xFF262A30 : 0xFFF2F4F7;
+    }
+
+    /** Diagonal cell (a core paired with itself). */
+    private int cellDiagonalColor() {
+        return darkMode ? 0xFF23272D : 0xFFEEF2F6;
     }
 
     private int focusBackground() {
