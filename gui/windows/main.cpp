@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// CoherencyLatency 1.2.0 - Windows 11 / Fluent desktop front end (spec v3).
+// CoherencyLatency 1.3.0 - Windows 11 / Fluent desktop front end (spec v3).
 //
 // Win32 + GDI/GDI+ + DWM only, /MT static CRT.  Native BUTTON / COMBOBOX /
 // PROGRESS_CLASS controls; the NxN heat matrix is its own child window that
@@ -239,7 +239,11 @@ std::wstring NsText(float value) {
     return Widen(buffer);
 }
 
-bool ValidCell(float value) { return value == value && value < 1.0e30f; }
+bool ValidCell(float value) {
+    // Idle cells are -1 (mirrors the Android port); NaN marks a failed pair.
+    // Both must fail validity so stats/heat never see them.
+    return value == value && value > 0.0f && value < 1.0e30f;
+}
 
 float ClampF(float value, float low, float high) {
     if (value < low) return low;
@@ -836,6 +840,7 @@ struct UiLayout {
     HFONT labelFont = nullptr;  // axis labels (shrinks for large n)
     bool showCellText = false;  // numbers only when the cells are big enough
     bool showStar = false;      // '*' suffix fits in the axis label column
+    bool showAxisLabels = true; // thread numbers visible at all (off when cells are tiny)
     float sbW = 0.0f;           // reserved strip for the vertical scrollbar
     float sbH = 0.0f;           // reserved strip for the horizontal scrollbar
     float gridOffsetX = 0.0f;   // centring of the grid inside the viewport
@@ -1137,7 +1142,7 @@ int CountTextLines(HFONT font, const std::wstring& text, float maxWidth) {
 // ---------------------------------------------------------------------------
 constexpr wchar_t kTitleText[] = L"CoherencyLatency";
 constexpr wchar_t kSubtitleText[] = L"缓存一致性延迟测试 · Windows 桌面版";
-constexpr wchar_t kVersionText[] = L"1.2.0";
+constexpr wchar_t kVersionText[] = L"1.3.0";
 constexpr wchar_t kDeviceTitleText[] = L"设备信息";
 constexpr wchar_t kStartText[] = L"开始测试";
 constexpr wchar_t kStopText[] = L"停止";
@@ -1479,6 +1484,11 @@ UiLayout ResolveGrid(UiLayout L) {
         L.labelFont = g_fonts.cellSmall;
     }
     L.showStar = TextWidth(L.labelFont, L"T31*") <= cell - Pxf(1.0f);
+    // Very small cells (e.g. 32 threads in a small window): thread numbers
+    // would overlap into an unreadable smear, so drop them entirely and let
+    // the matrix be a pure colour overview (same rule as the HarmonyOS/
+    // Android colour-only grids).
+    L.showAxisLabels = TextWidth(g_fonts.cellSmall, L"T31") <= cell - Pxf(1.0f);
 
     // Numbers inside the cells only when they actually fit (n <= 8 and the cell
     // is at least 18 pt); otherwise the matrix is a pure colour map and the
@@ -2143,6 +2153,7 @@ struct GridMetrics {
     bool scrollX = false;
     HFONT labelFont = nullptr;
     bool showStar = false;
+    bool showAxisLabels = true;
     bool showCellText = false;
     HFONT cellFont = nullptr;
 };
@@ -2166,6 +2177,7 @@ GridMetrics GridMetricsFromLayout(const UiLayout& L) {
     g.offsetY = L.gridOffsetY;
     g.labelFont = (L.labelFont != nullptr) ? L.labelFont : g_fonts.label;
     g.showStar = L.showStar;
+    g.showAxisLabels = L.showAxisLabels;
     g.showCellText = L.showCellText;
     g.cellFont = (L.cellFont != nullptr) ? L.cellFont : g_fonts.cellLarge;
     return g;
@@ -2339,6 +2351,10 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
                 if (measured) {
                     fill = HeatColor(value, stats.valid ? stats.minimum : 0.0f,
                                      stats.valid ? stats.maximum : 1.0f);
+                } else if ((i != j) && (value != value)) {
+                    // NaN = the pair failed to produce a sample: paint the
+                    // failure cell red like the Android HEAT_FAIL style.
+                    fill = 0xFF000000u | g_palette.error;
                 }
                 if (cellPath != nullptr) {
                     cellBrush.SetColor(Color(fill));
@@ -2415,6 +2431,11 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
                         ? g_app.cells[static_cast<size_t>(i) * n + j]
                         : std::numeric_limits<float>::quiet_NaN();
                 if (!ValidCell(value)) {
+                    if (value == value) {
+                        continue;  // idle cell (-1): no text
+                    }
+                    DrawTextCenter(hdc, L"N/A", gm.cellFont, g_palette.onAccent,
+                                   x, y, cell, cell);  // failed pair: red cell
                     continue;
                 }
                 wchar_t text[32] = {};
@@ -2426,7 +2447,7 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     }
 
     // ---- 列标签（固定顶部，逐列对齐到单元格中轴） ------------------------
-    if (target.top < clipT && target.bottom > 0) {
+    if (gm.showAxisLabels && target.top < clipT && target.bottom > 0) {
         SaveDC(hdc);
         IntersectClipRect(hdc, clipL, 0, clipR, clipT);
         // A 32-column grid has ~15 pt cells: "T31" is wider than that, so only
@@ -2462,7 +2483,7 @@ void PaintMatrix(HDC hdc, const RECT& dirty) {
     }
 
     // ---- 行标签（固定左侧） ----------------------------------------------
-    if (target.left < clipL && target.right > 0) {
+    if (gm.showAxisLabels && target.left < clipL && target.right > 0) {
         SaveDC(hdc);
         IntersectClipRect(hdc, 0, clipT, clipL, clipB);
         for (int i = 0; i < n; ++i) {
@@ -2547,10 +2568,10 @@ std::wstring ResolveResultDir() {
 
 void BuildFooterText() {
     if (g_app.resultDir.empty()) {
-        g_app.footerText = L"CoherencyLatency 1.2.0";
+        g_app.footerText = L"CoherencyLatency 1.3.0";
         return;
     }
-    g_app.footerText = Fmt(L"CoherencyLatency 1.2.0 · 结果自动保存到 %s",
+    g_app.footerText = Fmt(L"CoherencyLatency 1.3.0 · 结果自动保存到 %s",
                            g_app.resultDir.c_str());
 }
 
@@ -2630,7 +2651,7 @@ void ProgressCallback(void* context, const ClProgress* progress) {
 #if defined(CL_DEBUG_AFFINITY)
     if (!(progress->latency_ns == progress->latency_ns)) {
         cl_ui_log("[cb-nan] %d %d done=%d\n", progress->i, progress->j,
-                     progress->done);
+                  progress->done);
     }
 #endif
     payload->elapsed = progress->elapsed_seconds;
@@ -2646,34 +2667,12 @@ void FinalizeRun(ClResult* result) {
     if (n <= 0 || result->cells == nullptr) {
         return;
     }
-    g_app.cells.assign(static_cast<size_t>(n) * static_cast<size_t>(n),
-                       std::numeric_limits<float>::quiet_NaN());
+    g_app.cells.assign(static_cast<size_t>(n) * static_cast<size_t>(n), -1.0f);
     InvalidateStatsCache();
-    if (!result->aborted) {
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                g_app.cells[static_cast<size_t>(i) * n + j] =
-                    result->cells[static_cast<size_t>(i) * n + j];
-            }
-        }
-        return;
-    }
     for (int i = 0; i < n; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            const float a = result->cells[static_cast<size_t>(i) * n + j];
-            const float b = result->cells[static_cast<size_t>(j) * n + i];
-            const bool va = ValidCell(a);
-            const bool vb = ValidCell(b);
-            float value = std::numeric_limits<float>::quiet_NaN();
-            if (va && vb) {
-                value = (a + b) * 0.5f;
-            } else if (va) {
-                value = a;
-            } else if (vb) {
-                value = b;
-            }
-            g_app.cells[static_cast<size_t>(i) * n + j] = value;
-            g_app.cells[static_cast<size_t>(j) * n + i] = value;
+        for (int j = 0; j < n; ++j) {
+            g_app.cells[static_cast<size_t>(i) * n + j] =
+                result->cells[static_cast<size_t>(i) * n + j];
         }
     }
 }
@@ -2764,7 +2763,7 @@ void OnProgressMessage(const ProgressPayload* payload) {
 #if defined(CL_DEBUG_AFFINITY)
     if (!(payload->ns == payload->ns)) {
         cl_ui_log("[ui-nan] %d %d done=%d\n", payload->i, payload->j,
-                     payload->done);
+                  payload->done);
     }
 #endif
     g_app.elapsed = payload->elapsed;
@@ -3809,7 +3808,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
         winX = work.left;
     }
 
-    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, kMainClass, L"CoherencyLatency 1.2.0",
+    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, kMainClass, L"CoherencyLatency 1.3.0",
                                 kMainStyle, winX, winY, std::max(winW, Pxi(kMinW)),
                                 std::max(winH, Pxi(kMinH)), nullptr, nullptr, instance,
                                 nullptr);
