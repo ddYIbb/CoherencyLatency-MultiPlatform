@@ -74,7 +74,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "1.2.0";
+constexpr const char* kVersion = "1.3.0";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are 128 bytes, ARM/ARM64 Android devices and x86
@@ -154,6 +154,11 @@ struct ThreadConfig {
     // pinned is reported as N/A instead of as a number from the wrong core.
     bool affinity_ok = false;
     StartGate* gate = nullptr;
+    // Spec 9A: per-operation timestamps taken right after each successful
+    // store.  stamps[k] holds the stamp of the k-th successful operation of
+    // this worker in the current round.
+    std::uint64_t* stamps = nullptr;
+    std::uint64_t stamp_capacity = 0;
 };
 
 enum class Mode {
@@ -255,6 +260,34 @@ std::uint64_t now_ns() {
     }
 #endif
     return 0;
+}
+
+// Fine-grained one-shot timestamp used only for the per-operation direction
+// stamps (spec 9A).  now_ns() is window-grade; the hop values we want to
+// resolve are 20-100 ns, so the stamp must itself be much finer than that:
+//   - ARM64: the generic vDSO counter (cntvct_el0), one MRS, ~ns granularity.
+//   - x86/x64: lfence-serialised rdtsc (TSC frequency is derived per round in
+//     run_pair from the window itself, so no frequency query is needed).
+//   - Anything else: fall back to now_ns() (worst case the direction values
+//     degrade to the window value; correctness is unaffected).
+std::uint64_t cl_stamp() {
+#if defined(__aarch64__)
+    std::uint64_t value = 0;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#elif defined(__x86_64__) || defined(__i386__) || defined(_M_X64) ||          \
+    defined(_M_IX86)
+#if defined(_MSC_VER)
+    __mm_lfence();
+    return __rdtsc();
+#else
+    unsigned lo = 0, hi = 0;
+    __asm__ volatile("lfence\n\trdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
+#endif
+#else
+    return now_ns();
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -711,11 +744,18 @@ void bounce_worker(ThreadConfig* config) {
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
 
+    std::uint64_t stamped = 0;
     while (current <= limit) {
         std::uint64_t expected = current - 1;
         if (target.compare_exchange_strong(expected, current,
                                            std::memory_order_seq_cst,
                                            std::memory_order_seq_cst)) {
+            // Stamp immediately after the successful store (spec 9A): the
+            // difference of two consecutive stamps is one hand-off.
+            if (config->stamps != nullptr && stamped < config->stamp_capacity) {
+                config->stamps[stamped] = cl_stamp();
+                ++stamped;
+            }
             current += 2;
         }
     }
@@ -729,9 +769,14 @@ void owned_worker(ThreadConfig* config) {
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
 
+    std::uint64_t stamped = 0;
     while (current <= limit) {
         if (read_target.load(std::memory_order_acquire) == current - 1) {
             target.store(current, std::memory_order_release);
+            if (config->stamps != nullptr && stamped < config->stamp_capacity) {
+                config->stamps[stamped] = cl_stamp();
+                ++stamped;
+            }
             current += 2;
         }
     }
@@ -881,6 +926,11 @@ private:
 // number measured on the wrong core.
 struct PairOutcome {
     float latency_ns = std::numeric_limits<float>::quiet_NaN();
+    // Spec 9A: per-direction results (nan means "not available").  forward_ns
+    // is the processor1 -> processor2 direction of the hand-off chain,
+    // backward_ns the processor2 -> processor1 direction.
+    float forward_ns = std::numeric_limits<float>::quiet_NaN();
+    float backward_ns = std::numeric_limits<float>::quiet_NaN();
     bool affinity_ok = false;
     // True when this pair alone failed (a stalled round, a clock that did not
     // advance, a thread that could not be created).  The cell becomes N/A and
@@ -929,6 +979,21 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     config2.use_affinity = use_affinity;
     config2.gate = &gate;
 
+    // Spec 9A: per-operation direction stamps.  Enabled when the per-worker
+    // stamp buffer fits comfortably in memory; every round re-writes the
+    // buffers from index 0, so one buffer of 'iterations' entries suffices.
+    const bool use_stamps = iterations >= 8 && iterations <= (1ULL << 22);
+    std::vector<std::uint64_t> stamps1;
+    std::vector<std::uint64_t> stamps2;
+    if (use_stamps) {
+        stamps1.assign(static_cast<std::size_t>(iterations), 0);
+        stamps2.assign(static_cast<std::size_t>(iterations), 0);
+    }
+    config1.stamps = use_stamps ? stamps1.data() : nullptr;
+    config1.stamp_capacity = use_stamps ? iterations : 0;
+    config2.stamps = use_stamps ? stamps2.data() : nullptr;
+    config2.stamp_capacity = use_stamps ? iterations : 0;
+
     WorkerThread thread1;
     WorkerThread thread2;
 
@@ -974,6 +1039,10 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
 
     float minimum = std::numeric_limits<float>::infinity();
     std::chrono::milliseconds round_timeout(kFirstRoundTimeoutMs);
+    // Spec 9A two-pass buffers: one row per round that passed the guard.
+    std::vector<float> round_forward;
+    std::vector<float> round_backward;
+    std::vector<float> round_window;
     try {
         for (int round = 0; round < config1.rounds; ++round) {
             // Both workers are waiting for the next round here, so the shared
@@ -984,6 +1053,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             gate.round_end[1] = 0;
 
             const std::uint64_t start = now_ns();
+            const std::uint64_t ticks_begin = use_stamps ? cl_stamp() : 0;
             gate.round_go.store(round + 1, std::memory_order_release);
             {
                 // Sleeping instead of spinning: the workers publish their own
@@ -1033,6 +1103,90 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             if (value < minimum) {
                 minimum = value;
             }
+
+            // Spec 9A: aggregate the per-operation stamps of this round into
+            // two directional means.  The k-th store of one worker is paired
+            // with the store of the other worker it caused:
+            //   bounce: w1 stores 1,3,5... and w2 stores 2,4,6...
+            //           w1[k] -> w2[k] -> w1[k+1]
+            //   owned:  w2 stores 2,4,6... and w1 stores 3,5,7...
+            //           w2[k] -> w1[k] -> w2[k+1]
+            // Both stamps follow their store, so the difference is the time
+            // the peer needed to observe it.
+            if (use_stamps && round > 0) {
+                const std::uint64_t ticks_end = cl_stamp();
+                if (ticks_end > ticks_begin && end > start) {
+                    const double ns_per_tick =
+                        static_cast<double>(end - start) /
+                        static_cast<double>(ticks_end - ticks_begin);
+                    // Resolution guard: an ARM arch timer at ~19.2 MHz ticks
+                    // every ~52 ns, coarser than an SMT hop; such stamps
+                    // carry heavy quantization noise, so the directional
+                    // path stays off and the window value fills every cell.
+                    if (ns_per_tick > 10.0) {
+                        continue;
+                    }
+                    double sum_forward = 0.0;
+                    double sum_backward = 0.0;
+                    std::uint64_t count_forward = 0;
+                    std::uint64_t count_backward = 0;
+                    const auto add_hop = [ns_per_tick](std::uint64_t later,
+                                                       std::uint64_t earlier,
+                                                       double* sum,
+                                                       std::uint64_t* count) {
+                        if (later <= earlier) {
+                            return;
+                        }
+                        const double hop =
+                            static_cast<double>(later - earlier) * ns_per_tick;
+                        // Anything above 100 us is a descheduled worker, not
+                        // a hand-off; one such sample must not decide the
+                        // mean.
+                        if (hop < 100000.0) {
+                            *sum += hop;
+                            ++*count;
+                        }
+                    };
+                    if (!owned_mode) {
+                        for (std::size_t k = 0; k < iterations; ++k) {
+                            add_hop(stamps2[k], stamps1[k], &sum_forward,
+                                    &count_forward);
+                        }
+                        for (std::size_t k = 0; k + 1 < iterations; ++k) {
+                            add_hop(stamps1[k + 1], stamps2[k], &sum_backward,
+                                    &count_backward);
+                        }
+                    } else {
+                        for (std::size_t k = 0; k < iterations; ++k) {
+                            add_hop(stamps1[k], stamps2[k], &sum_backward,
+                                    &count_backward);
+                        }
+                        for (std::size_t k = 0; k + 1 < iterations; ++k) {
+                            add_hop(stamps2[k + 1], stamps1[k], &sum_forward,
+                                    &count_forward);
+                        }
+                    }
+                    // Both directions must have seen at least half of their
+                    // hops cleanly, and the mean must be plausible next to
+                    // the window value; otherwise the round is discarded.
+                    if (count_forward > iterations / 2 &&
+                        count_backward > iterations / 2) {
+                        const double forward =
+                            sum_forward / static_cast<double>(count_forward);
+                        const double backward =
+                            sum_backward / static_cast<double>(count_backward);
+                        if (forward > 0.25 * value && forward < 4.0 * value &&
+                            backward > 0.25 * value &&
+                            backward < 4.0 * value) {
+                            round_forward.push_back(
+                                static_cast<float>(forward));
+                            round_backward.push_back(
+                                static_cast<float>(backward));
+                            round_window.push_back(value);
+                        }
+                    }
+                }
+            }
         }
     } catch (...) {
         // Release any worker still waiting for a round, then join them.  An
@@ -1048,11 +1202,43 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     thread1.join();
     thread2.join();
 
+    // Spec 9A two-pass: keep only rounds whose window is within 1.35x of the
+    // best window, then take the per-direction minimum of those rounds.  The
+    // window minimum anchors us to the cleanest round; the direction minimum
+    // takes the fastest complete observation of each direction.
+    float best_forward = std::numeric_limits<float>::infinity();
+    float best_backward = std::numeric_limits<float>::infinity();
+    if (!round_window.empty()) {
+        float best_window = round_window[0];
+        for (const float window : round_window) {
+            if (window < best_window) {
+                best_window = window;
+            }
+        }
+        const float window_limit =
+            best_window > 0.0f ? best_window * 1.35f : best_window;
+        for (std::size_t k = 0; k < round_window.size(); ++k) {
+            if (round_window[k] <= window_limit) {
+                if (round_forward[k] < best_forward) {
+                    best_forward = round_forward[k];
+                }
+                if (round_backward[k] < best_backward) {
+                    best_backward = round_backward[k];
+                }
+            }
+        }
+    }
+
     PairOutcome outcome;
     outcome.affinity_ok = config1.affinity_ok && config2.affinity_ok;
     outcome.latency_ns = outcome.affinity_ok
                              ? minimum
                              : std::numeric_limits<float>::quiet_NaN();
+    if (outcome.affinity_ok && best_forward < std::numeric_limits<float>::infinity() &&
+        best_backward < std::numeric_limits<float>::infinity()) {
+        outcome.forward_ns = best_forward;
+        outcome.backward_ns = best_backward;
+    }
     return outcome;
 }
 // ---------------------------------------------------------------------------
@@ -1082,8 +1268,10 @@ void print_progress(int done, int total) {
 MatrixResult run_matrix(const Options& options, int n) {
     MatrixResult result;
     result.n = n;
+    // -1 marks a pair that has not been measured yet; NaN marks a pair that
+    // was measured but could not be pinned (both print as N/A).
     result.filtered.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n),
-                           0.0f);
+                           -1.0f);
 
     // Keep only one accumulator per core pair.  The previous version stored
     // n*n*runs floats and reduced them in a second pass; taking the minimum
@@ -1114,7 +1302,11 @@ MatrixResult run_matrix(const Options& options, int n) {
                 outcome = run_pair(i, j, options.iterations, options.runs,
                                    owned_mode, options.use_affinity);
             }
-            result.filtered[matrix_index(n, i, j)] = outcome.latency_ns;
+            // Spec 9A: prefer the forward direction of this ordered pair;
+            // fall back to the window value when the stamps were unusable.
+            result.filtered[matrix_index(n, i, j)] =
+                outcome.forward_ns == outcome.forward_ns ? outcome.forward_ns
+                                                         : outcome.latency_ns;
             if (!outcome.affinity_ok) {
                 ++unpinned_pairs;
             }
@@ -1147,7 +1339,7 @@ void print_matrix(const MatrixResult& result) {
             } else {
                 const float value =
                     result.filtered[matrix_index(result.n, i, j)];
-                if (value != value) {
+                if (value != value || value < 0.0f) {
                     std::fputs("N/A", stdout);
                 } else {
                     // %.6f matches the original std::fixed << setprecision(6).
@@ -1221,7 +1413,7 @@ void write_csv(const std::string& path, const MatrixResult& result) {
             } else {
                 const float value =
                     result.filtered[matrix_index(result.n, i, j)];
-                if (value != value) {
+                if (value != value || value < 0.0f) {
                     std::fputs("N/A", output);
                 } else {
                     // %.6g matches the original std::defaultfloat
