@@ -19,13 +19,13 @@
 
 | 平台 | 成品 | 最低系统 | 支持的 CPU / 指令集 |
 |---|---|---|---|
-| macOS | `CoherencyLatency-macOS-v1.2.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
-| macOS（图形界面） | `CoherencyLatency-macOS-GUI-v1.2.0.zip` | Intel Mac：macOS 10.10 Yosemite（2014）；Apple Silicon Mac：macOS 11.0 | 原生 AppKit 界面，同一个 Universal 2 程序（x86_64 + arm64），内含 `.app` 应用包与独立可执行文件 |
-| Windows | `CoherencyLatency-Windows-v1.2.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
-| Windows（图形界面） | `CoherencyLatency-Windows-GUI-v1.2.0.zip` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 原生 Win32 界面，跟随系统深色模式与强调色；单文件启动器同样自动匹配 x86、x64、ARM64 |
-| Android（命令行） | `CoherencyLatency-Android-v1.2.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
-| Android（图形界面） | `CoherencyLatency-Android-UI-v1.2.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
-| HarmonyOS | CoherencyLatency-HarmonyOS-v1.2.0.zip（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、折叠屏、阔折叠、三折叠、平板、2in1、电视、圆形/方形手表、车机（11 类设备形态已实测）；动态识别 2–20 个逻辑线程 |
+| macOS | `CoherencyLatency-macOS-v1.3.0.zip` | Intel Mac：macOS 10.7 Lion（2011）；Apple Silicon Mac：macOS 11.0 Big Sur（2020） | 同一个 Universal 2 可执行文件，同时包含 x86_64 和 arm64（覆盖 M1/M2/M3/M4）切片，旧 Intel 和新 Apple Silicon Mac 无需选择版本 |
+| macOS（图形界面） | `CoherencyLatency-macOS-GUI-v1.3.0.zip` | Intel Mac：macOS 10.10 Yosemite（2014）；Apple Silicon Mac：macOS 11.0 | 原生 AppKit 界面，同一个 Universal 2 程序（x86_64 + arm64），内含 `.app` 应用包与独立可执行文件 |
+| Windows | `CoherencyLatency-Windows-v1.3.0.exe` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 单文件启动器自动匹配 x86、x64、ARM64 原生程序；x86 版按最基础的 32 位指令集编译（连 SSE2 都不要求），x64/ARM64 为各自架构的基准指令集 |
+| Windows（图形界面） | `CoherencyLatency-Windows-GUI-v1.3.0.zip` | x86 / x64：Windows Vista SP2（2009）；ARM64：Windows 10 | 原生 Win32 界面，跟随系统深色模式与强调色；单文件启动器同样自动匹配 x86、x64、ARM64 |
+| Android（命令行） | `CoherencyLatency-Android-v1.3.0.zip` | Android 4.1（API 16） | 四个独立可执行文件：arm64-v8a / armv7 / x86 / x86_64；在 Termux 或 adb shell 中运行 |
+| Android（图形界面） | `CoherencyLatency-Android-UI-v1.3.0.apk` | Android 4.1（API 16） | 同一个 APK 内含 arm64-v8a、armv7、x86、x86_64 四个原生库；手机、平板、圆形手表、Android TV 通用 |
+| HarmonyOS | CoherencyLatency-HarmonyOS-v1.3.0.zip（未签名 HAP） | HarmonyOS 5.0.0（API 12） | arm64-v8a 真机 / x86_64 模拟器；手机、折叠屏、阔折叠、三折叠、平板、2in1、电视、圆形/方形手表、车机（11 类设备形态已实测）；动态识别 2–20 个逻辑线程 |
 
 几点说明：
 
@@ -43,19 +43,19 @@
 
 ## 下载
 
-最新版本：[v1.2.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.2.0)（macOS / Windows / Android / HarmonyOS 四平台统一版本号）。
+最新版本：[v1.3.0](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/tag/v1.3.0)（macOS / Windows / Android / HarmonyOS 四平台统一版本号）。
 
-**2026-11-26 适配更新**：鸿蒙版完成 11 类设备形态实测（手机 / 折叠屏 Mate X7 / 阔折叠 Pura X Max / 三折叠 TripleFold / 平板 / 2in1 / 折叠 2in1 / 电视 / 圆形手表 / 方形手表 / 车机），TV 与车机支持遥控器方向键 + OK 键操作，手表有圆形/方形专属布局；Android UI 版结果矩阵改为单元格背景热力填充（与 Windows/macOS/鸿蒙一致）；引擎统一加入自旋上限 + 微睡眠等待策略，降低空转开销。
+**v1.3.0 改动**：修复 Windows 图形界面 32 线程矩阵随机 `N/A`（绑核失败自动重试 + 保守等待，32×32 全量三轮复测 0 `N/A`，GUI 与 CLI 平均 63.6 ns 一致）；ARM 平台加入计时分辨率护栏（本地定时器每跳 > 10 ns 时跳过方向聚合，只保留窗口实测值，避免低分辨率定时器算错 SMT 相邻核对；x86 行为不变）；Android 图形界面结果矩阵改为与 Windows / macOS / 鸿蒙一致的单元格背景热力填充；Windows / macOS 图形界面矩阵格子过小时自动隐藏行 / 列线程号标签；鸿蒙 11 类设备形态实测（手机 / 折叠屏 Mate X7 / 阔折叠 Pura X Max / 三折叠 TripleFold / 平板 / 2in1 / 折叠 2in1 / 电视 / 圆形手表 / 方形手表 / 车机），TV 与车机支持遥控器方向键 + OK 键操作；macOS 图形界面修复一处失败色定义缺失；未测「·」与绑核失败 `N/A` 语义全平台统一；Android versionCode 6、HarmonyOS versionCode 1000300。
 
 | 平台 | Release 文件 |
 |---|---|
-| macOS | [CoherencyLatency-macOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-v1.2.0.zip) |
-| macOS（图形界面） | [CoherencyLatency-macOS-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-macOS-GUI-v1.2.0.zip) |
-| Windows | [CoherencyLatency-Windows-v1.2.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-v1.2.0.exe) |
-| Windows（图形界面） | [CoherencyLatency-Windows-GUI-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Windows-GUI-v1.2.0.zip) |
-| Android（命令行） | [CoherencyLatency-Android-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-v1.2.0.zip) |
-| Android（图形界面） | [CoherencyLatency-Android-UI-v1.2.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-Android-UI-v1.2.0.apk) |
-| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.2.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.2.0/CoherencyLatency-HarmonyOS-v1.2.0.zip) |
+| macOS | [CoherencyLatency-macOS-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-macOS-v1.3.0.zip) |
+| macOS（图形界面） | [CoherencyLatency-macOS-GUI-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-macOS-GUI-v1.3.0.zip) |
+| Windows | [CoherencyLatency-Windows-v1.3.0.exe](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Windows-v1.3.0.exe) |
+| Windows（图形界面） | [CoherencyLatency-Windows-GUI-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Windows-GUI-v1.3.0.zip) |
+| Android（命令行） | [CoherencyLatency-Android-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Android-v1.3.0.zip) |
+| Android（图形界面） | [CoherencyLatency-Android-UI-v1.3.0.apk](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-Android-UI-v1.3.0.apk) |
+| HarmonyOS | [CoherencyLatency-HarmonyOS-v1.3.0.zip](https://github.com/ddYIbb/CoherencyLatency-MultiPlatform/releases/download/v1.3.0/CoherencyLatency-HarmonyOS-v1.3.0.zip) |
 
 macOS 版下载后解压得到一个可执行文件。如果首次打开被 Gatekeeper 拦截，请右键选择“打开”，或执行 `xattr -dr com.apple.quarantine CoherencyLatency` 清除隔离属性。
 
