@@ -6,8 +6,8 @@
 
 - 上游项目：<https://github.com/CXWorld/MicroBenchX>（tag v1.0.5，MIT，Copyright (c) 2021 CapFrameX）
 - 原文件：`source/MicroBenchX.Icl/CoherencyLatency.cpp`
-- 版本：`1.2.0`
-- 成品：命令行版 `CoherencyLatency-Android-v1.2.0.zip`（四个可执行文件）与图形界面版 `CoherencyLatency-Android-UI-v1.2.0.apk`（app/ 目录构建）
+- 版本：`1.3.0`
+- 成品：命令行版 `CoherencyLatency-Android-v1.3.0.zip`（四个可执行文件）与图形界面版 `CoherencyLatency-Android-UI-v1.3.0.apk`（app/ 目录构建）
 - 系统下限：**Android 4.1（API 16）**；32 位 ABI 按 API 16 编译，64 位 ABI 按 API 21 编译（bionic 的 64 位 ABI 从 21 起才有）
 
 ## 支持的目标
@@ -21,12 +21,12 @@
 
 minSdk 16（Android 4.1 Jelly Bean），NDK r21e（clang 9，是最后一个还能编 API 16 的 LTS 版本）。四个产物都是 PIE 可执行文件，
 只依赖 `libc.so` / `libm.so` / `libdl.so`，已用 `-static-libstdc++` 静态链接 C++ 运行库，
-不需要在设备上额外安装任何库，也不需要 root。产物已用 `-s` strip，体积 239,960 / 128,756 / 239,364 / 264,736 B。
+不需要在设备上额外安装任何库，也不需要 root。产物已用 `-s` strip，体积 289,112 / 161,524 / 304,900 / 330,272 B。
 
 ## 图形界面版 APK（app/）
 
 `app/` 是同一测量核心的 Android GUI 封装：JNI 层 `jni/clbench_jni.cpp` 复用 bounce/owned、线程复用和 O(n²) 矩阵，
-Java 层只负责固定参数、进度回调和矩阵显示。成品 `CoherencyLatency-Android-UI-v1.2.0.apk`
+Java 层只负责固定参数、进度回调和矩阵显示。成品 `CoherencyLatency-Android-UI-v1.3.0.apk`
 （minSdk 16，内含 arm64-v8a / armeabi-v7a / x86 / x86_64 四个 `libclbench.so`）。
 
 - 固定默认参数：全部逻辑核心、1,000,000 次、3 轮、Bounce；
@@ -34,8 +34,8 @@ Java 层只负责固定参数、进度回调和矩阵显示。成品 `CoherencyL
 - 完成后自动保存 CSV 到 `getExternalFilesDir(null)/results/`，`导出 CSV…` 走系统 SAF 手动保存；
 - 不申请任何权限（包括网络权限），不需要 root。
 
-**多形态适配。** 同一份 APK（versionCode 5，533,655 B，SHA-256
-`9f6d3c9ad0fc02140ae48a974931358b3beaf3ccfe2c568415a8f32e563db31f`）在四种形态下自动切换布局：
+**多形态适配。** 同一份 APK（versionCode 6，545,943 B，SHA-256
+`1dc1c071e0f1b98cb58675103786a5c0c6cc3a7d2180e5b5b00e62ac80846e03`）在四种形态下自动切换布局：
 
 | 形态 | 判定 | 布局 |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ python build_apk.py
 ```
 
 脚本依次编译四个 ABI 的 `.so`（每个都 strip）、生成图标、aapt2 编译资源、javac + d8 生成 dex（`--min-api 16`）、打包、
-zipalign 对齐、apksigner 调试证书签名，最终输出到 `../CoherencyLatency-Android-UI-v1.2.0.apk`。
+zipalign 对齐、apksigner 调试证书签名，最终输出到 `../CoherencyLatency-Android-UI-v1.3.0.apk`。
 用户说明见 `docs/APK使用说明.md`（也有 `.html` / `.pdf`，含界面截图）。
 
 ## 命令行构建
@@ -89,7 +89,7 @@ python build_cli.py          # 一次编完四个 ABI
 python make-android-zip.py
 ```
 
-会生成带 Unix 权限位（四个 ELF 为 0755、文档为 0644）的 `CoherencyLatency-Android-v1.2.0.zip`。
+会生成带 Unix 权限位（四个 ELF 为 0755、文档为 0644）的 `CoherencyLatency-Android-v1.3.0.zip`。
 `build/SHA256SUMS` 由 `tools/gen_cli_sums.py` 生成。
 
 ## 安装到设备
