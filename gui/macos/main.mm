@@ -1,4 +1,4 @@
-// CoherencyLatency 1.2.0 - macOS desktop GUI front end (native AppKit).
+// CoherencyLatency 1.3.0 - macOS desktop GUI front end (native AppKit).
 //
 // GUI_SPEC.md v3 section 3: the macOS front end is a *native* Mac application,
 // not a cross-platform skin:
@@ -583,6 +583,14 @@ static NSColor* CLHeatColour(float value, float minimum, float maximum) {
                                alpha:1.0];
 }
 
+// Failed-pair cell (engine NaN): same red as the Android HEAT_FAIL swatch.
+static NSColor* CLFailColour(void) {
+    return [NSColor colorWithSRGBRed:(CGFloat)0xF8 / 255.0
+                               green:(CGFloat)0x35 / 255.0
+                                blue:(CGFloat)0x33 / 255.0
+                               alpha:1.0];
+}
+
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------
@@ -707,8 +715,10 @@ static void CLResetCells(CLModel* model, int n) {
         n = 1;
     }
     model->n = n;
+    // Idle cells are -1 (mirrors the Android port); NaN is reserved for a
+    // pair that failed, which paints the red HEAT_FAIL cell.
     model->cells.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n),
-                        std::numeric_limits<float>::quiet_NaN());
+                        -1.0f);
     model->done = 0;
     model->total = n * (n - 1);
     model->lastI = -1;
@@ -840,7 +850,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 @property(nonatomic, assign) CLModel* model;
 // A copy of the computed layout: the cells and the fixed header row are both
 // positioned with cl_layout::ColumnX / ColumnCenterX, so they cannot drift.
-@property(nonatomic, assign) cl_layout::Layout layout;
+@property(nonatomic, assign) cl_layout::Layout matrixLayout;  // NOT named 'layout': the synthesized getter -[self layout] overrides NSView's -layout hook (macOS 12+ re-enters AppKit layout mid-pass)
 @end
 
 @implementation CLMatrixView {
@@ -899,7 +909,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     if (row < 0 || row >= n || column < 0 || column >= n) {
         return NSZeroRect;
     }
-    const cl_layout::Layout layout = self.layout;
+    const cl_layout::Layout layout = self.matrixLayout;
     const CGFloat x = static_cast<CGFloat>(cl_layout::ColumnX(layout, column));
     const CGFloat y = static_cast<CGFloat>(row) *
                       (layout.cellHeight + layout.cellGap);
@@ -913,7 +923,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     if (model == nullptr || model->n < 1) {
         return;
     }
-    const cl_layout::Layout layout = self.layout;
+    const cl_layout::Layout layout = self.matrixLayout;
     const int n = model->n;
     const CLStats& stats = CLCachedStats(*model);
 
@@ -970,7 +980,20 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
             const float value =
                 (index < model->cells.size()) ? model->cells[index]
                                               : std::numeric_limits<float>::quiet_NaN();
-            if (std::isnan(value) || value <= 0.0f) {
+            if (std::isnan(value)) {
+                // Failed pair: the engine stores NaN for a pair that could not
+                // produce a sample.  Match the Android port's HEAT_FAIL cell so
+                // an N/A hole is visible at a glance instead of reading as an
+                // empty/idle cell.
+                CLFillCell(context, cellPath, x, y, CLFailColour());
+                if (showValues) {
+                    CLDrawStringCentred(@"N/A", cell, CLUIFont(baseFont),
+                                        CLQuaternaryColour());
+                }
+                continue;
+            }
+            if (value <= 0.0f) {
+                // Idle (-1) cell: neutral fill, middle dot when values shown.
                 CLFillCell(context, cellPath, x, y, CLQuaternaryColour());
                 if (showValues) {
                     CLDrawStringCentred(@"·", cell, CLUIFont(baseFont),
@@ -1009,7 +1032,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 @interface CLMatrixHeaderView : NSView
 @property(nonatomic, assign) CLModel* model;
-@property(nonatomic, assign) cl_layout::Layout layout;
+@property(nonatomic, assign) cl_layout::Layout matrixLayout;  // NOT named 'layout': the synthesized getter -[self layout] overrides NSView's -layout hook (macOS 12+ re-enters AppKit layout mid-pass)
 @end
 
 @implementation CLMatrixHeaderView
@@ -1033,7 +1056,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     if (model == nullptr || model->n < 1) {
         return;
     }
-    const cl_layout::Layout layout = self.layout;
+    const cl_layout::Layout layout = self.matrixLayout;
     const int n = model->n;
     const CGFloat cellW = static_cast<CGFloat>(layout.cellWidth);
     const CGFloat height = NSHeight(self.bounds);
@@ -1161,6 +1184,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     NSTextField* _footerLabel;
 
     BOOL _inLayout;
+    BOOL _layoutScheduled;   // coalesced deferred relayout
 }
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
@@ -1168,6 +1192,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     if (self != nil) {
         _model.arch = kArchName;
         _inLayout = NO;
+        _layoutScheduled = NO;
         [self buildSubviews];
         [[NSNotificationCenter defaultCenter]
             addObserver:self
@@ -1231,7 +1256,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
     _subtitleLabel = [self makeLabel:@"缓存一致性延迟测试 · macOS 桌面版"
                                 font:CLUIFont(kSubtitleFontSize)
                               colour:CLSecondaryColour()];
-    _versionLabel = [self makeLabel:@"1.2.0" font:CLDigitFont(kVersionFontSize)
+    _versionLabel = [self makeLabel:@"1.3.0" font:CLDigitFont(kVersionFontSize)
                              colour:CLTertiaryColour()];
     _versionLabel.alignment = NSTextAlignmentRight;
 
@@ -1467,6 +1492,22 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 // --- layout ---------------------------------------------------------------
 
+// Coalesced relayout: setFrameSize and windowDidResize fire *during* AppKit's
+// own layout/display pass; setting frames synchronously there re-enters the
+// layout engine mid-pass, which on macOS 12+ can crash AppKit's geometry
+// copying (_NSViewLayout -> _platform_memmove, SIGBUS).  Bouncing to the next
+// runloop turn (orderOut guard keeps stacking sane) avoids that re-entry.
+- (void)scheduleLayout {
+    if (_layoutScheduled || _inLayout) {
+        return;
+    }
+    _layoutScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_layoutScheduled = NO;
+        [self syncLayout];
+    });
+}
+
 - (void)syncLayout {
     if (_inLayout) {
         return;
@@ -1581,8 +1622,8 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
     // The grid and its fixed header share one layout copy, so the headers are
     // centred with exactly the column arithmetic the cells use.
-    _matrixView.layout = layout;
-    _matrixHeaderView.layout = layout;
+    _matrixView.matrixLayout = layout;
+    _matrixHeaderView.matrixLayout = layout;
     _matrixHeaderView.frame = CLRect(layout.headerRow);
 
     _scrollView.frame = CLRect(layout.scrollView);
@@ -1608,7 +1649,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-    [self syncLayout];
+    [self scheduleLayout];
 }
 
 - (void)viewDidChangeEffectiveAppearance {
@@ -1632,7 +1673,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    [self syncLayout];
+    [self scheduleLayout];
 }
 
 // --- refreshing -----------------------------------------------------------
@@ -1744,7 +1785,7 @@ static CGFloat CLCellFontSize(NSString* text, CGFloat cellWidth, CGFloat base) {
 - (void)refreshAll {
     [self updateControls];
     [self updateStatusAndProgress];
-    [self syncLayout];
+    [self scheduleLayout];
     [_matrixView setNeedsDisplay:YES];
 }
 
@@ -1930,7 +1971,7 @@ static void CLInstallMainMenu(CLAppDelegate* delegate);
     [self buildWindow];
     [self updateFooter];
     [_rootView refreshAll];
-    [_rootView syncLayout];
+    [_rootView scheduleLayout];
 }
 
 - (void)updateFooter {
@@ -2387,7 +2428,7 @@ static void CLProgressThunk(void* context, const ClProgress* progress) {
 // view's autoresizing already triggers syncLayout, this keeps it explicit.
 - (void)windowDidResize:(NSNotification*)notification {
     (void)notification;
-    [_rootView syncLayout];
+    [_rootView scheduleLayout];
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
