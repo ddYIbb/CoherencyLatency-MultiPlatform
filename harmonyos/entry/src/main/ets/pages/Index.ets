@@ -424,7 +424,7 @@ struct Index {
 
   /** 小屏（圆形手表 466 vp 及其它 <600 vp 设备）：压缩标题与卡片内边距。 */
   private isCompact(): boolean {
-    return this.viewWidth < 600;
+    return this.viewWidth < 600 && sysDeviceInfo.deviceType === 'wearable';
   }
 
   /** 圆形表盘需要更大的左右留白，方形表盘可以贴着边框排布。 */
