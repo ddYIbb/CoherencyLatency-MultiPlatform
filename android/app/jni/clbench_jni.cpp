@@ -74,6 +74,11 @@ struct ThreadConfig {
     // worker could not be pinned, so its pair is reported as N/A instead of
     // pretending the number belongs to the requested CPU pair.
     bool affinity_ok = false;
+    // Directional sampling: each successful store records the cycle stamp that
+    // follows it.  The stamps are paired with the peer worker's stamps after
+    // the round to obtain per-hand-off latencies (see run_pair).
+    std::uint64_t* stamps = nullptr;
+    std::uint64_t stamp_capacity = 0;
 };
 
 std::uint64_t now_ns() {
@@ -83,6 +88,24 @@ std::uint64_t now_ns() {
                static_cast<std::uint64_t>(ts.tv_nsec);
     }
     return 0;
+}
+
+// Fine-grained stamp used for directional sampling.  The nanosecond clock is
+// too coarse for same-core hand-offs (~25 ns), so stamps use the ARM generic
+// timer (a constant-frequency counter shared by all cores) and are converted
+// with the nanosecond clock measured over the same round.  On non-ARM hosts
+// the TSC plays the same role.
+std::uint64_t cl_stamp() {
+#if defined(__aarch64__)
+    std::uint64_t value = 0;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_lfence();
+    return static_cast<std::uint64_t>(__builtin_ia32_rdtsc());
+#else
+    return now_ns();
+#endif
 }
 
 inline void spin_pause();
@@ -185,6 +208,15 @@ void bounce_worker(ThreadConfig* config) {
         if (target.compare_exchange_strong(expected, current,
                                            std::memory_order_seq_cst,
                                            std::memory_order_seq_cst)) {
+            // Stamp immediately after the successful store: the difference to
+            // the peer worker's stamp is the time the peer needed to complete
+            // its own hand-off, which pairs into directional latencies.
+            if (config->stamps != nullptr && config->stamp_capacity != 0) {
+                const std::uint64_t stored = (current - config->start) / 2;
+                if (stored < config->stamp_capacity) {
+                    config->stamps[stored] = cl_stamp();
+                }
+            }
             current += 2;
         } else if ((++spins & 0x3FFu) == 0 &&
                    abort.load(std::memory_order_acquire)) {
@@ -205,6 +237,12 @@ void owned_worker(ThreadConfig* config) {
     while (current <= limit) {
         if (read_target.load(std::memory_order_acquire) == current - 1) {
             target.store(current, std::memory_order_release);
+            if (config->stamps != nullptr && config->stamp_capacity != 0) {
+                const std::uint64_t stored = (current - config->start) / 2;
+                if (stored < config->stamp_capacity) {
+                    config->stamps[stored] = cl_stamp();
+                }
+            }
             current += 2;
         } else if ((++spins & 0x3FFu) == 0 &&
                    abort.load(std::memory_order_acquire)) {
@@ -333,6 +371,11 @@ struct PairOutcome {
     // True when this pair alone failed (no pin, stalled round, thread that
     // never started).  The pair becomes N/A and the matrix keeps going.
     bool failed = false;
+    // Directional latencies from the stamp pairs: forward_ns is the hand-off
+    // time from processor1 to processor2, backward_ns the reverse.  NaN means
+    // the stamps could not be paired reliably for that direction.
+    float forward_ns = std::numeric_limits<float>::quiet_NaN();
+    float backward_ns = std::numeric_limits<float>::quiet_NaN();
 };
 
 PairOutcome failed_pair() {
@@ -347,6 +390,11 @@ PairOutcome failed_pair() {
 // slice is short enough to be invisible to the user and long enough that the
 // main thread no longer burns a core in sched_yield() polling.
 constexpr std::chrono::milliseconds kWaitSlice(20);
+
+// Number of pause/yield instructions the main thread spends on a round before
+// it falls back to the cv wait above.  It only removes latency from the
+// measurement thread's wait; the workers and the timed region are unchanged.
+constexpr int kRoundSpinLimit = 20000;
 
 // Time budget for the very first round of a pair and the floor for the later
 // rounds (see run_pair): big.LITTLE parts can need well over a second for one
@@ -404,6 +452,22 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     config2.slot = 1;
     config2.gate = &gate;
 
+    // Directional sampling is only useful when a round has enough hand-offs
+    // for the mean to be stable, and the buffer must stay small enough for
+    // huge iteration counts.
+    const bool use_stamps =
+        iterations >= 8 && iterations <= (1ULL << 22);
+    std::vector<std::uint64_t> stamps1;
+    std::vector<std::uint64_t> stamps2;
+    if (use_stamps) {
+        stamps1.assign(static_cast<std::size_t>(iterations), 0);
+        stamps2.assign(static_cast<std::size_t>(iterations), 0);
+    }
+    config1.stamps = use_stamps ? stamps1.data() : nullptr;
+    config1.stamp_capacity = use_stamps ? iterations : 0;
+    config2.stamps = use_stamps ? stamps2.data() : nullptr;
+    config2.stamp_capacity = use_stamps ? iterations : 0;
+
     WorkerThread thread1;
     WorkerThread thread2;
     const WorkerFunction worker = owned_mode ? owned_worker : bounce_worker;
@@ -442,6 +506,12 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         }
 
         float minimum = std::numeric_limits<float>::infinity();
+        // Per-round directional means and their window values; the final
+        // directional latency comes only from rounds whose window value is
+        // close to the best round, so noisy rounds cannot decide the mean.
+        std::vector<double> round_forward;
+        std::vector<double> round_backward;
+        std::vector<float> round_window;
         // A round takes 2 * iterations handoffs, so its duration depends on the
         // device and on the pair.  A fixed 500 ms budget used to abort the whole
         // matrix on big.LITTLE parts where a slow pair needs longer than that;
@@ -462,12 +532,28 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             gate.round_end[1] = 0;
 
             const std::uint64_t begin = now_ns();
+            const std::uint64_t ticks_begin = use_stamps ? cl_stamp() : 0;
             gate.round_go.store(round + 1, std::memory_order_release);
-            const bool finished = wait_for_condition(
-                gate, round_timeout, [&gate, round] {
-                    return gate.round_done.load(std::memory_order_acquire) >=
-                           2 * (round + 1);
-                });
+            // A round normally needs far less than kWaitSlice (20 ms): spin
+            // with pause/yield first so the handoff loop itself is not held up
+            // by a sleep, then fall back to the interruptible cv wait, which
+            // still honours Stop and the round timeout.
+            const auto round_finished = [&gate, round] {
+                return gate.round_done.load(std::memory_order_acquire) >=
+                       2 * (round + 1);
+            };
+            bool finished = false;
+            for (int spin = 0; spin < kRoundSpinLimit; ++spin) {
+                if (round_finished()) {
+                    finished = true;
+                    break;
+                }
+                spin_pause();
+            }
+            if (!finished) {
+                finished = wait_for_condition(gate, round_timeout,
+                                              round_finished);
+            }
             if (!finished) {
                 abort_pair(gate, config1.rounds);
                 gate.cv.notify_all();
@@ -497,13 +583,91 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
                 std::max<std::uint64_t>(kMinimumRoundTimeoutMs,
                                         elapsed_ms * 4 + 2000));
 
+            const std::uint64_t ticks_end = use_stamps ? cl_stamp() : 0;
             const double latency_ns = static_cast<double>(end - begin) /
                                       static_cast<double>(iterations) / 2.0;
             const float value = static_cast<float>(latency_ns);
             if (value < minimum) {
                 minimum = value;
             }
+            // Directional samples.  The hand-off chain is fixed per mode, so
+            // the k-th store of one worker is paired with the store of the
+            // other worker it caused:
+            //   bounce: w1 stores 1,3,5... and w2 stores 2,4,6...
+            //           w1[k] -> w2[k] -> w1[k+1]
+            //   owned:  w2 stores 2,4,6... and w1 stores 3,5,7...
+            //           w2[k] -> w1[k] -> w2[k+1]
+            // Both stamps follow their store, so the difference is the time
+            // the peer needed to observe it.
+            if (use_stamps && round > 0 && ticks_end > ticks_begin && end > begin) {
+                const double ns_per_tick = static_cast<double>(end - begin) /
+                                           static_cast<double>(ticks_end - ticks_begin);
+                // Resolution guard: an ARM arch timer at ~19.2 MHz ticks
+                // every ~52 ns, coarser than an SMT hop; means built from
+                // such stamps carry heavy quantization noise, so the whole
+                // directional path stays off and the window value keeps
+                // filling every cell.
+                if (ns_per_tick <= 10.0) {
+                double sum_forward = 0.0;
+                double sum_backward = 0.0;
+                std::uint64_t count_forward = 0;
+                std::uint64_t count_backward = 0;
+                const auto add_hop = [ns_per_tick](std::uint64_t later,
+                                                   std::uint64_t earlier,
+                                                   double* sum,
+                                                   std::uint64_t* count) {
+                    if (later <= earlier) {
+                        return;
+                    }
+                    const double hop =
+                        static_cast<double>(later - earlier) * ns_per_tick;
+                    // Anything above 100 us is a descheduled worker, not a
+                    // hand-off; one such sample must not decide the mean.
+                    if (hop < 100000.0) {
+                        *sum += hop;
+                        ++*count;
+                    }
+                };
+                if (!owned_mode) {
+                    for (std::uint64_t k = 0; k < iterations; ++k) {
+                        add_hop(stamps2[k], stamps1[k], &sum_forward,
+                                &count_forward);
+                    }
+                    for (std::uint64_t k = 0; k + 1 < iterations; ++k) {
+                        add_hop(stamps1[k + 1], stamps2[k], &sum_backward,
+                                &count_backward);
+                    }
+                } else {
+                    for (std::uint64_t k = 0; k < iterations; ++k) {
+                        add_hop(stamps1[k], stamps2[k], &sum_backward,
+                                &count_backward);
+                    }
+                    for (std::uint64_t k = 0; k + 1 < iterations; ++k) {
+                        add_hop(stamps2[k + 1], stamps1[k], &sum_forward,
+                                &count_forward);
+                    }
+                }
+                if (count_forward > iterations / 2 &&
+                    count_backward > iterations / 2) {
+                    const double forward =
+                        sum_forward / static_cast<double>(count_forward);
+                    const double backward =
+                        sum_backward / static_cast<double>(count_backward);
+                    const double average = 0.5 * (forward + backward);
+                    // The stamps must describe the same hand-offs as the
+                    // window sample.  A mean far away from it means the clock
+                    // cannot resolve a hop or a worker was descheduled, so the
+                    // round is dropped and the window sample stays in charge.
+                    if (average > 0.25 * static_cast<double>(value) &&
+                        average < 4.0 * static_cast<double>(value)) {
+                        round_forward.push_back(forward);
+                        round_backward.push_back(backward);
+                        round_window.push_back(value);
+                    }
+                }
+            }
         }
+        } // end resolution-guard scope
 
         thread1.join();
         thread2.join();
@@ -511,6 +675,36 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         outcome.latency_ns = minimum;
         outcome.affinity_ok = config1.affinity_ok && config2.affinity_ok;
         outcome.aborted = false;
+        if (!round_forward.empty()) {
+            // Only rounds whose window value is close to the best round decide
+            // the directional latency; a round with background load would
+            // otherwise inflate the mean of its hops.
+            float best_window = round_window[0];
+            for (const float window : round_window) {
+                if (window < best_window) {
+                    best_window = window;
+                }
+            }
+            const float window_limit =
+                best_window <= 0.0f ? best_window : best_window * 1.35f;
+            double best_forward = std::numeric_limits<double>::infinity();
+            double best_backward = std::numeric_limits<double>::infinity();
+            for (std::size_t k = 0; k < round_forward.size(); ++k) {
+                if (round_window[k] <= window_limit) {
+                    if (round_forward[k] < best_forward) {
+                        best_forward = round_forward[k];
+                    }
+                    if (round_backward[k] < best_backward) {
+                        best_backward = round_backward[k];
+                    }
+                }
+            }
+            if (best_forward < std::numeric_limits<double>::infinity() &&
+                best_backward < std::numeric_limits<double>::infinity()) {
+                outcome.forward_ns = static_cast<float>(best_forward);
+                outcome.backward_ns = static_cast<float>(best_backward);
+            }
+        }
         return outcome;
     } catch (...) {
         // Thread creation failed: N/A for this pair instead of a dead matrix.
@@ -666,9 +860,17 @@ std::string device_info() {
 
     const int physical = physical_core_count(static_cast<int>(configured));
 
+    // SMT sibling pairs: logical slots that share a physical core.  0 when the
+    // kernel does not expose topology (physical unknown), matching the
+    // "never a guessed number" rule above.
+    const int smt_pairs = (physical > 0 && configured > physical)
+                              ? static_cast<int>(configured) - physical
+                              : 0;
+
     char buffer[256] = {};
-    std::snprintf(buffer, sizeof(buffer), "%s|%ld|%ld|%s|%d", model.c_str(),
-                  configured, line_size, architecture_name().c_str(), physical);
+    std::snprintf(buffer, sizeof(buffer), "%s|%ld|%ld|%s|%d|%d", model.c_str(),
+                  configured, line_size, architecture_name().c_str(), physical,
+                  smt_pairs);
     return std::string(buffer);
 }
 
@@ -846,9 +1048,13 @@ Java_com_ddyibb_coherencylatency_NativeBench_runMatrix(JNIEnv* env, jclass,
                 // A pair whose workers could not really be pinned, or whose
                 // round stalled twice, is still consumed so the remaining pairs
                 // finish; its value is NaN and the Java layer renders/export it
-                // as N/A.
+                // as N/A.  Cell [row][column] is the hand-off from thread row
+                // to thread column: the directional sample is used when it
+                // survived the guard in run_pair.
                 const float value = (!pair.failed && pair.affinity_ok)
-                                        ? pair.latency_ns
+                                        ? (pair.forward_ns == pair.forward_ns
+                                               ? pair.forward_ns
+                                               : pair.latency_ns)
                                         : std::numeric_limits<float>::quiet_NaN();
                 matrix[static_cast<std::size_t>(row) * n + column] = value;
                 ++done_pairs;
