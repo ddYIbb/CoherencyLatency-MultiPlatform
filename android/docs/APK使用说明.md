@@ -1,7 +1,7 @@
 # CoherencyLatency Android 图形界面版 · 使用说明
 
-**版本：** 1.2.0（versionName `1.2.0`，versionCode 5，2026-11-25 第二次修订构建）
-**安装包：** `CoherencyLatency-Android-UI-v1.2.0.apk`（533,655 B / 521.1 KiB）
+**版本：** 1.3.0（versionName `1.3.0`，versionCode 5，2026-11-25 第二次修订构建）
+**安装包：** `CoherencyLatency-Android-UI-v1.3.0.apk`（545,943 B / 533.1 KiB）
 **适用系统：** Android 4.1（API 16）及以上
 **架构：** 同一个 APK 内含 arm64-v8a、armeabi-v7a、x86、x86_64 四个原生库，安装时自动选择
 **界面：** 手机、平板、圆形手表、Android TV 共用一个 APK，自动适配
@@ -42,7 +42,7 @@
 - `adb install`（调试用）：
 
 ```bash
-adb install -r CoherencyLatency-Android-UI-v1.2.0.apk
+adb install -r CoherencyLatency-Android-UI-v1.3.0.apk
 ```
 
 Android 4.1~7：设置 → 安全 → 允许「未知来源」（4.x 在「设置 → 安全 → 未知来源」）。
@@ -59,7 +59,7 @@ Android 4.1~4.4 上没有系统的「保存到…」文件选择器，**导出 C
 
 ```bash
 adb connect 192.168.1.50:5555     # 电视开启「网络调试」后；USB 调试也可
-adb install -r CoherencyLatency-Android-UI-v1.2.0.apk
+adb install -r CoherencyLatency-Android-UI-v1.3.0.apk
 ```
 
 装好后在电视的「应用」列表里会出现 **CoherencyLatency**（带 TV 横幅）。
@@ -71,7 +71,7 @@ adb install -r CoherencyLatency-Android-UI-v1.2.0.apk
 手表用 adb 安装（先在手表开发者选项里开启「ADB 调试」，USB 或 Wi-Fi adb 均可）：
 
 ```bash
-adb install -r CoherencyLatency-Android-UI-v1.2.0.apk
+adb install -r CoherencyLatency-Android-UI-v1.3.0.apk
 ```
 
 APK 里已声明 `com.google.android.wearable.standalone = true`，可以独立运行。
@@ -419,13 +419,13 @@ CSV 单文件约 150~200 字节（4 核）。上述数值会随系统版本、�
 APK SHA-256：
 
 ```text
-9f6d3c9ad0fc02140ae48a974931358b3beaf3ccfe2c568415a8f32e563db31f
+1dc1c071e0f1b98cb58675103786a5c0c6cc3a7d2180e5b5b00e62ac80846e03
 ```
 
 设备上可用 Termux 校验：
 
 ```bash
-sha256sum CoherencyLatency-Android-UI-v1.2.0.apk
+sha256sum CoherencyLatency-Android-UI-v1.3.0.apk
 ```
 
 源码在 `Android-移植/app/`：
@@ -464,7 +464,7 @@ python build_apk.py
 
 ## 12. 版本与许可
 
-- 版本：1.2.0（versionCode 5，对应 MicroBenchX v1.0.5 的算法与输出格式）
+- 版本：1.3.0（versionCode 5，对应 MicroBenchX v1.0.5 的算法与输出格式）
 - 系统支持：Android 4.1（API 16）及以上
 - 架构：arm64-v8a / armeabi-v7a / x86 / x86_64 四合一
 - 界面适配：手机 / 平板 / 圆形手表 / Android TV
