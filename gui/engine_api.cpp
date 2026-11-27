@@ -97,12 +97,17 @@ void fill_slot_cores(ClCpuInfo* info) {
                 &length)) {
             int core_id = 0;
             std::size_t offset = 0;
+            // EfficiencyClass (Win10 1709+): 0 = least performant (E),
+            // higher values = more performant tiers (P, or P/M on newer
+            // SoCs).  Collect the distinct values to build tier counts.
+            std::vector<unsigned char> core_classes;
             while (offset < length) {
                 const auto* entry =
                     reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
                         buffer.data() + offset);
                 if (entry->Relationship == RelationProcessorCore) {
                     const PROCESSOR_RELATIONSHIP& relationship = entry->Processor;
+                    core_classes.push_back(relationship.EfficiencyClass);
                     for (WORD g = 0; g < relationship.GroupCount; ++g) {
                         const GROUP_AFFINITY& mask = relationship.GroupMask[g];
                         for (int bit = 0; bit < 64; ++bit) {
@@ -120,6 +125,53 @@ void fill_slot_cores(ClCpuInfo* info) {
                 offset += entry->Size;
             }
             info->physical = core_id;
+            // Build perf tiers: sort distinct class values ascending so
+            // tier 0 is the efficiency tier and the last tier is the
+            // performance tier, mirroring the macOS hw.perflevelN order.
+            std::vector<unsigned char> distinct = core_classes;
+            std::sort(distinct.begin(), distinct.end());
+            distinct.erase(
+                std::unique(distinct.begin(), distinct.end()), distinct.end());
+            info->perf_tier_count =
+                static_cast<int>(distinct.size() > 8 ? 8 : distinct.size());
+            // Count logical slots per tier, not physical cores: SMT siblings
+            // belong to the same tier, and the matrix addresses slots.
+            offset = 0;
+            for (int tier = 0; tier < info->perf_tier_count; ++tier) {
+                info->perf_tier[tier] = 0;
+            }
+            while (offset < length) {
+                const auto* entry2 =
+                    reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+                        buffer.data() + offset);
+                if (entry2->Relationship == RelationProcessorCore) {
+                    const PROCESSOR_RELATIONSHIP& rel2 = entry2->Processor;
+                    int slot_bits = 0;
+                    for (WORD g2 = 0; g2 < rel2.GroupCount; ++g2) {
+                        const ULONGLONG m2 = rel2.GroupMask[g2].Mask;
+                        for (int bit = 0; bit < 64; ++bit) {
+                            if ((m2 >> bit) & 1) {
+                                ++slot_bits;
+                            }
+                        }
+                    }
+                    // Tier of this core = index of its class in distinct.
+                    for (int tier = 0; tier < info->perf_tier_count; ++tier) {
+                        if (rel2.EfficiencyClass ==
+                            distinct[static_cast<std::size_t>(tier)]) {
+                            info->perf_tier[tier] += slot_bits;
+                            break;
+                        }
+                    }
+                }
+                offset += entry2->Size;
+            }
+            if (info->perf_tier_count > 0) {
+                info->perf_level0 = info->perf_tier[0];
+            }
+            if (info->perf_tier_count > 1) {
+                info->perf_level1 = info->perf_tier[1];
+            }
         }
     }
 #endif
@@ -170,6 +222,10 @@ int cl_query_cpu(ClCpuInfo* out) {
     out->physical = info.physical;
     out->perf_level0 = info.perf_level0;
     out->perf_level1 = info.perf_level1;
+    out->perf_tier_count = info.perf_tier_count;
+    for (int tier = 0; tier < info.perf_tier_count && tier < 8; ++tier) {
+        out->perf_tier[tier] = info.perf_tier[tier];
+    }
     out->cache_line = info.cache_line;
     out->groups = g_topology.groups;
     std::snprintf(out->model, sizeof(out->model), "%s", info.model.c_str());
@@ -229,8 +285,10 @@ int cl_run_matrix(const ClRunConfig* config, ClProgressFn progress,
 
         const std::size_t cell_count =
             static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
-        std::vector<float> cells(cell_count,
-                                 std::numeric_limits<float>::quiet_NaN());
+        // Idle cells start at -1 (matches the Android port): NaN now means a
+        // pair that failed to produce a sample, so GUIs can paint a distinct
+        // failure cell for it.
+        std::vector<float> cells(cell_count, -1.0f);
 
         const int total_pairs = n * n - n;
         int done_pairs = 0;
@@ -247,10 +305,49 @@ int cl_run_matrix(const ClRunConfig* config, ClProgressFn progress,
                     aborted = 1;
                     break;
                 }
+                int slot_qos[CL_MAX_SLOTS];
+                for (int slot = 0; slot < CL_MAX_SLOTS; ++slot) {
+                    slot_qos[slot] = -1;
+                }
+#if defined(__APPLE__)
+                if (options.use_affinity && info.perf_tier_count > 1) {
+                    int base = 0;
+                    for (int tier = 0; tier < info.perf_tier_count; ++tier) {
+                        int qos;
+                        if (tier == 0) {
+                            qos = QOS_CLASS_USER_INTERACTIVE;
+                        } else if (tier == info.perf_tier_count - 1) {
+                            qos = QOS_CLASS_BACKGROUND;
+                        } else {
+                            qos = QOS_CLASS_USER_INITIATED;
+                        }
+                        const int count = info.perf_tier[tier];
+                        for (int k = 0;
+                             k < count && base + k < CL_MAX_SLOTS; ++k) {
+                            slot_qos[base + k] = qos;
+                        }
+                        base += count;
+                    }
+                }
+#endif
                 const PairOutcome outcome =
-                    run_pair(i, j, options.iterations, options.runs,
-                             options.mode == Mode::Owned, options.use_affinity);
-                cells[matrix_index(n, i, j)] = outcome.latency_ns;
+                    run_pair(i, j, slot_qos[i], slot_qos[j],
+                             options.iterations, options.runs,
+                             options.mode == Mode::Owned,
+                             options.use_affinity);
+#if defined(CL_DEBUG_AFFINITY)
+                cl_debug_log("[pair] %d %d ok=%d ns=%.3f\n", i, j,
+                             outcome.affinity_ok ? 1 : 0,
+                             static_cast<double>(outcome.latency_ns));
+#endif
+                // Cell [i][j] is the hand-off from thread i to thread j.  The
+                // directional sample is used when it survived the guard in
+                // run_pair, otherwise the window average of the pair.
+                const float cell_ns =
+                    outcome.forward_ns == outcome.forward_ns
+                        ? outcome.forward_ns
+                        : outcome.latency_ns;
+                cells[matrix_index(n, i, j)] = cell_ns;
                 if (!outcome.affinity_ok) {
                     ++unpinned_pairs;
                 }
@@ -261,7 +358,7 @@ int cl_run_matrix(const ClRunConfig* config, ClProgressFn progress,
                     update.total = total_pairs;
                     update.i = i;
                     update.j = j;
-                    update.latency_ns = outcome.latency_ns;
+                    update.latency_ns = cell_ns;
                     update.affinity_ok = outcome.affinity_ok ? 1 : 0;
                     update.elapsed_seconds = now_seconds_since(start_ns);
                     progress(progress_context, &update);
