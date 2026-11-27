@@ -93,7 +93,9 @@ constexpr double kCellGapCompact = 1.0;
 constexpr double kCompactLabelWidth = 26.0;
 // Below this cell size the T0..Tn-1 axis labels no longer fit without
 // overlapping each other, so the grid is drawn as a bare colour map.
-constexpr double kAxisLabelMinCell = 12.0;
+// A "T31" header is ~19 pt wide at the 10.5 pt label size; below ~22 pt cells
+// the column headers would collide into an unreadable smear, so the numbers go.
+constexpr double kAxisLabelMinCell = 22.0;
 
 struct Rect {
     double x = 0.0;
@@ -446,8 +448,10 @@ inline Layout Compute(const Metrics& in) {
                          std::max(out.gridRegionHeight, out.gridHeight)};
 
     // Legend row: 低 [64-sample heat bar] 高 on the left, statistics flush right.
-    const double lowW = in.lowLabelW + 2.0;
-    const double highW = in.highLabelW + 2.0;
+    // +10: NSTextField draws its cell with a few points of internal padding on
+    // each side, so the text width alone clips the last digit ("28.6" -> "28.").
+    const double lowW = in.lowLabelW + 10.0;
+    const double highW = in.highLabelW + 10.0;
     out.legendLow = Rect{kCardPadding, legendTop, lowW, kLegendRowHeight};
     out.legendBar = Rect{kCardPadding + lowW + 5.0,
                          legendTop + std::floor((kLegendRowHeight - kLegendBarHeight) / 2.0),
