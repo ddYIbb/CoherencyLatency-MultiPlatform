@@ -84,7 +84,7 @@ static void cl_debug_log(const char* fmt, ...) {
 
 namespace {
 
-constexpr const char* kVersion = "1.2.0";
+constexpr const char* kVersion = "1.3.0";
 constexpr int kBarWidth = 60;
 
 // Apple Silicon cache lines are commonly 128 bytes; keep this a compile-time
@@ -203,8 +203,13 @@ struct ThreadConfig {
     AtomicCell* target = nullptr;
     AtomicCell* read_target = nullptr;
     int cpu_index = 0;
+    int qos_class_hint = -1;  // QoS-only macOS tier placement (-1 = none)
     int rounds = 1;
     bool use_affinity = true;
+    // Per-success hand-off stamps (directional measurement).  nullptr keeps the
+    // worker free of the extra clock read; stamp_capacity bounds the writes.
+    std::uint64_t* stamps = nullptr;
+    std::uint64_t stamp_capacity = 0;
     // Set by the worker itself: true when the requested placement was verified
     // (or when no pinning was requested).  A pair whose workers could not be
     // pinned is reported as N/A instead of as a number from the wrong core.
@@ -239,6 +244,11 @@ struct CpuInfo {
     int perf_level1 = 0;
     int cache_line = 64;
     std::string model;
+    // Apple Silicon perf tiers (P/M/E or more).  Tier 0 is the fastest
+    // cluster band, higher indices are slower.  perf_level0/1 above mirror
+    // tier[0]/tier[1] for the existing two-tier UI.
+    int perf_tier_count = 0;
+    int perf_tier[8] = {};
 };
 
 struct MatrixResult {
@@ -300,6 +310,33 @@ std::uint64_t now_ns() {
     return 0;
 }
 
+// A hand-off stamp (v1.2.1 directional measurement).  The window sample of a
+// round divides the whole round by the number of hand-offs, so it reports the
+// average of both directions of a pair.  Stamping every successful store lets
+// the two directions be measured separately.  The stamp has to be much finer
+// than the shortest hop (about 25 ns between SMT siblings), so the finest
+// counter the platform exposes in user mode is used:
+//   x86/x64          TSC behind an lfence (about 0.4 ns ticks on a 2.5 GHz core)
+//   ARM64 Linux/OHOS CNTVCT_EL0, the counter now_ns already reads
+//   Windows on ARM   no user-mode cycle counter; QPC at 100 ns granularity is
+//                    too coarse, so run_pair falls back to the window sample.
+std::uint64_t cl_stamp() {
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
+    _mm_lfence();
+#if defined(_MSC_VER)
+    return static_cast<std::uint64_t>(__rdtsc());
+#else
+    return static_cast<std::uint64_t>(__builtin_ia32_rdtsc());
+#endif
+#elif defined(__aarch64__)
+    std::uint64_t value = 0;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#else
+    return now_ns();
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // CPU information
 // ---------------------------------------------------------------------------
@@ -353,8 +390,21 @@ CpuInfo read_cpu_info() {
 #if defined(__APPLE__)
     info.logical = sysctl_int("hw.logicalcpu", 0);
     info.physical = sysctl_int("hw.physicalcpu", info.logical);
-    info.perf_level0 = perf_level_cores("hw.perflevel0.logicalcpu");
-    info.perf_level1 = perf_level_cores("hw.perflevel1.logicalcpu");
+    // Enumerate every perf tier the kernel reports (two on current Apple
+    // Silicon; three or more on future multi-tier SoCs).  hw.perflevelN
+    // keys appear only for tiers that exist, so stop at the first miss.
+    for (int tier = 0; tier < 8; ++tier) {
+        const int count = perf_level_cores(
+            ("hw.perflevel" + std::to_string(tier) + ".logicalcpu").c_str());
+        if (count <= 0) {
+            break;
+        }
+        info.perf_tier[info.perf_tier_count++] = count;
+    }
+    info.perf_level0 =
+        info.perf_tier_count > 0 ? info.perf_tier[0] : 0;
+    info.perf_level1 =
+        info.perf_tier_count > 1 ? info.perf_tier[1] : 0;
     info.cache_line = sysctl_int("hw.cachelinesize", 128);
     info.model = sysctl_string("machdep.cpu.brand_string");
 #endif
@@ -445,7 +495,11 @@ void yield_current_thread();
 // Returns true when the requested placement was applied (or when no hard
 // pinning was requested).  macOS only has best-effort hints, so it always
 // reports success; Windows and Linux report a failure that becomes N/A.
-bool configure_current_thread(int cpu_index, bool use_affinity) {
+bool configure_current_thread(int cpu_index, bool use_affinity,
+                                 int qos_class_hint) {
+#if !defined(__APPLE__)
+    (void)qos_class_hint;  // QoS hints only exist on macOS.
+#endif
 #if defined(__APPLE__)
     // Give benchmark workers the highest user QoS class.  QoS is not CPU
     // pinning, but it reduces the chance of an unrelated task preempting them.
@@ -456,8 +510,12 @@ bool configure_current_thread(int cpu_index, bool use_affinity) {
         static const SetQosClassSelfFn set_qos =
             reinterpret_cast<SetQosClassSelfFn>(
                 dlsym(RTLD_DEFAULT, "pthread_set_qos_class_self_np"));
-        if (set_qos != nullptr) {
-            set_qos(QOS_CLASS_USER_INTERACTIVE, 0);
+        if (set_qos != nullptr && qos_class_hint >= 0) {
+            // Best-effort tier placement: each slot's QoS band nudges the
+            // scheduler toward the matching cluster tier (UIQ -> P,
+            // USER_INITIATED -> M, BACKGROUND -> E).  macOS has no hard
+            // per-core pinning, so slots map to core *classes*, not cores.
+            set_qos(static_cast<qos_class_t>(qos_class_hint), 0);
         }
 
         // Experimental macOS affinity hint.  Threads with the same tag are
@@ -578,12 +636,22 @@ void bounce_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
+    // The stamp is taken right after the store committed, so a pair of stamps
+    // measures the time the peer needed to observe the store, without the
+    // anticipation bias a pre-store stamp would introduce.
+    std::uint64_t* stamps = config->stamps;
+    const std::uint64_t capacity = config->stamp_capacity;
+    std::uint64_t stored = 0;
 
     while (current <= limit) {
         std::uint64_t expected = current - 1;
         if (target.compare_exchange_strong(expected, current,
                                            std::memory_order_seq_cst,
                                            std::memory_order_seq_cst)) {
+            if (stamps != nullptr && stored < capacity) {
+                stamps[stored] = cl_stamp();
+            }
+            ++stored;
             current += 2;
         }
     }
@@ -596,10 +664,17 @@ void owned_worker(ThreadConfig* config) {
     std::atomic<std::uint64_t>& target = config->target->value;
     std::uint64_t current = config->start;
     const std::uint64_t limit = 2 * config->iterations;
+    std::uint64_t* stamps = config->stamps;
+    const std::uint64_t capacity = config->stamp_capacity;
+    std::uint64_t stored = 0;
 
     while (current <= limit) {
         if (read_target.load(std::memory_order_acquire) == current - 1) {
             target.store(current, std::memory_order_release);
+            if (stamps != nullptr && stored < capacity) {
+                stamps[stored] = cl_stamp();
+            }
+            ++stored;
             current += 2;
         }
     }
@@ -677,7 +752,8 @@ private:
         ThreadConfig* config = data->config;
         StartGate* gate = config->gate;
         config->affinity_ok =
-            configure_current_thread(config->cpu_index, config->use_affinity);
+            configure_current_thread(config->cpu_index, config->use_affinity,
+                                  config->qos_class_hint);
         gate->ready.fetch_add(1, std::memory_order_acq_rel);
 
         for (int round = 0; round < config->rounds; ++round) {
@@ -745,14 +821,23 @@ private:
 // pinned to its requested processor, which is reported as N/A instead of as a
 // number measured on the wrong core.
 struct PairOutcome {
+    // Window sample: the round divided by the number of hand-offs, i.e. the
+    // average of both directions.  Kept as the fallback for platforms whose
+    // clock cannot resolve a single hop.
     float latency_ns = std::numeric_limits<float>::quiet_NaN();
+    // Directional samples.  forward_ns is processor1 -> processor2, so cell
+    // [i][j] reports the hand-off from thread i to thread j and the two halves
+    // of the matrix are independent measurements.
+    float forward_ns = std::numeric_limits<float>::quiet_NaN();
+    float backward_ns = std::numeric_limits<float>::quiet_NaN();
     bool affinity_ok = false;
 };
 
 // Runs all samples of one core pair and returns the fastest one, which is the
 // same statistic the original computed by storing n*n*runs values and taking
 // the minimum afterwards.
-PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
+PairOutcome run_pair(int processor1, int processor2, int qos1, int qos2,
+                     std::uint64_t iterations,
                      std::uint64_t runs, bool owned_mode, bool use_affinity) {
     // Separate 128-byte-aligned cells keep the two owners on distinct cache
     // lines on Apple Silicon (whose cache line is commonly 128 bytes).
@@ -762,15 +847,29 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
 
     StartGate gate;
 
+    // Directional measurement buffers.  They are reused by every round, and a
+    // round always performs exactly 'iterations' successful stores per worker,
+    // so no entry can keep a stale value from an earlier round.
+    const bool use_stamps = iterations >= 8 && iterations <= (1ULL << 22);
+    std::vector<std::uint64_t> stamps1;
+    std::vector<std::uint64_t> stamps2;
+    if (use_stamps) {
+        stamps1.assign(static_cast<std::size_t>(iterations), 0);
+        stamps2.assign(static_cast<std::size_t>(iterations), 0);
+    }
+
     ThreadConfig config1;
     config1.start = owned_mode ? 3 : 1;
     config1.iterations = iterations;
     config1.target = &target1;
     config1.read_target = &target2;
     config1.cpu_index = processor1;
+    config1.qos_class_hint = qos1;
     config1.rounds = static_cast<int>(runs);
     config1.use_affinity = use_affinity;
     config1.gate = &gate;
+    config1.stamps = use_stamps ? stamps1.data() : nullptr;
+    config1.stamp_capacity = use_stamps ? iterations : 0;
 
     ThreadConfig config2;
     config2.start = 2;
@@ -778,9 +877,12 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     config2.target = owned_mode ? &target2 : &target1;
     config2.read_target = &target1;
     config2.cpu_index = processor2;
+    config2.qos_class_hint = qos2;
     config2.rounds = static_cast<int>(runs);
     config2.use_affinity = use_affinity;
     config2.gate = &gate;
+    config2.stamps = use_stamps ? stamps2.data() : nullptr;
+    config2.stamp_capacity = use_stamps ? iterations : 0;
 
     WorkerThread thread1;
     WorkerThread thread2;
@@ -806,6 +908,12 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     }
 
     float minimum = std::numeric_limits<float>::infinity();
+    // Per-round directional means and their window values; the final
+    // directional latency comes only from rounds whose window value is close
+    // to the best round, so noisy rounds cannot decide the mean.
+    std::vector<double> round_forward;
+    std::vector<double> round_backward;
+    std::vector<float> round_window;
     const auto wait_round = [&gate](int round) {
         // A pair needs only a few microseconds to finish a short round, so a
         // syscall-based wait would outlast the round and, on Windows, could
@@ -825,9 +933,11 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             target2.value.store(0u, std::memory_order_relaxed);
 
             const std::uint64_t start = now_ns();
+            const std::uint64_t ticks_begin = use_stamps ? cl_stamp() : 0;
             gate.round_go.store(round + 1, std::memory_order_release);
             wait_round(round);
             const std::uint64_t end = now_ns();
+            const std::uint64_t ticks_end = use_stamps ? cl_stamp() : 0;
             if (end <= start) {
                 throw std::runtime_error("monotonic clock did not advance");
             }
@@ -841,6 +951,83 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
             if (value < minimum) {
                 minimum = value;
             }
+            // Directional samples.  The hand-off chain is fixed per mode, so
+            // the k-th store of one worker is paired with the store of the
+            // other worker it caused:
+            //   bounce: w1 stores 1,3,5... and w2 stores 2,4,6...
+            //           w1[k] -> w2[k] -> w1[k+1]
+            //   owned:  w2 stores 2,4,6... and w1 stores 3,5,7...
+            //           w2[k] -> w1[k] -> w2[k+1]
+            // Both stamps follow their store, so the difference is the time
+            // the peer needed to observe it.
+            if (use_stamps && round > 0 && ticks_end > ticks_begin && end > start) {
+                const double ns_per_tick = static_cast<double>(end - start) /
+                                           static_cast<double>(ticks_end - ticks_begin);
+                // Resolution guard: an ARM arch timer at ~19.2 MHz ticks
+                // every ~52 ns, coarser than an SMT hop; such stamps carry
+                // heavy quantization noise, so the directional path stays
+                // off and the window value fills every cell.
+                if (ns_per_tick > 10.0) {
+                    goto after_direction;
+                }
+                double sum_forward = 0.0;
+                double sum_backward = 0.0;
+                std::uint64_t count_forward = 0;
+                std::uint64_t count_backward = 0;
+                const auto add_hop = [ns_per_tick](std::uint64_t later,
+                                                   std::uint64_t earlier,
+                                                   double* sum,
+                                                   std::uint64_t* count) {
+                    if (later <= earlier) {
+                        return;
+                    }
+                    const double hop =
+                        static_cast<double>(later - earlier) * ns_per_tick;
+                    // Anything above 100 us is a descheduled worker, not a
+                    // hand-off; one such sample must not decide the mean.
+                    if (hop < 100000.0) {
+                        *sum += hop;
+                        ++*count;
+                    }
+                };
+                if (!owned_mode) {
+                    for (std::size_t k = 0; k < iterations; ++k) {
+                        add_hop(stamps2[k], stamps1[k], &sum_forward,
+                                &count_forward);
+                    }
+                    for (std::size_t k = 0; k + 1 < iterations; ++k) {
+                        add_hop(stamps1[k + 1], stamps2[k], &sum_backward,
+                                &count_backward);
+                    }
+                } else {
+                    for (std::size_t k = 0; k < iterations; ++k) {
+                        add_hop(stamps1[k], stamps2[k], &sum_backward,
+                                &count_backward);
+                    }
+                    for (std::size_t k = 0; k + 1 < iterations; ++k) {
+                        add_hop(stamps2[k + 1], stamps1[k], &sum_forward,
+                                &count_forward);
+                    }
+                }
+                if (count_forward > iterations / 2 &&
+                    count_backward > iterations / 2) {
+                    const double forward =
+                        sum_forward / static_cast<double>(count_forward);
+                    const double backward =
+                        sum_backward / static_cast<double>(count_backward);
+                    const double average = 0.5 * (forward + backward);
+                    // The stamps must describe the same hand-offs as the
+                    // window sample.  A mean far away from it means the clock
+                    // cannot resolve a hop or a worker was descheduled, so the
+                    // round is dropped and the window sample stays in charge.
+                    if (average > 0.25 * static_cast<double>(value) &&
+                        average < 4.0 * static_cast<double>(value)) {
+                        round_forward.push_back(forward);
+                        round_backward.push_back(backward);
+                        round_window.push_back(value);
+                    }
+                }
+            }
         }
     } catch (...) {
         // Release any worker still waiting for a round, then join them before
@@ -852,6 +1039,7 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
         throw;
     }
 
+    after_direction:;
     thread1.join();
     thread2.join();
 
@@ -866,6 +1054,36 @@ PairOutcome run_pair(int processor1, int processor2, std::uint64_t iterations,
     outcome.latency_ns = outcome.affinity_ok
                              ? minimum
                              : std::numeric_limits<float>::quiet_NaN();
+    if (outcome.affinity_ok && !round_forward.empty()) {
+        // Only rounds whose window value is close to the best round decide the
+        // directional latency; a round with background load would otherwise
+        // inflate the mean of its hops.
+        float best_window = round_window[0];
+        for (const float window : round_window) {
+            if (window < best_window) {
+                best_window = window;
+            }
+        }
+        const float window_limit =
+            best_window <= 0.0f ? best_window : best_window * 1.35f;
+        double best_forward = std::numeric_limits<double>::infinity();
+        double best_backward = std::numeric_limits<double>::infinity();
+        for (std::size_t k = 0; k < round_forward.size(); ++k) {
+            if (round_window[k] <= window_limit) {
+                if (round_forward[k] < best_forward) {
+                    best_forward = round_forward[k];
+                }
+                if (round_backward[k] < best_backward) {
+                    best_backward = round_backward[k];
+                }
+            }
+        }
+        if (best_forward < std::numeric_limits<double>::infinity() &&
+            best_backward < std::numeric_limits<double>::infinity()) {
+            outcome.forward_ns = static_cast<float>(best_forward);
+            outcome.backward_ns = static_cast<float>(best_backward);
+        }
+    }
     return outcome;
 }
 // ---------------------------------------------------------------------------
@@ -895,8 +1113,10 @@ void print_progress(int done, int total) {
 MatrixResult run_matrix(const Options& options, int n) {
     MatrixResult result;
     result.n = n;
+    // -1 marks "not measured yet"; NaN marks a failed pair.  Both print as
+    // N/A in the CSV (v1.3.0 spec: a stopped run leaves unmeasured pairs N/A).
     result.filtered.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n),
-                           0.0f);
+                           -1.0f);
 
     // Keep only one accumulator per core pair.  The previous version stored
     // n*n*runs floats and reduced them in a second pass; taking the minimum
@@ -909,6 +1129,38 @@ MatrixResult run_matrix(const Options& options, int n) {
     const int total_pairs = n * n - n;
     int done_pairs = 0;
     int unpinned_pairs = 0;
+    // macOS: map each slot to the QoS band of its core tier so the matrix
+    // shows a legible P/M/E structure (see configure_current_thread).
+    // On other platforms slot_qos stays -1 (no QoS hint); the QOS_CLASS_*
+    // constants only exist in the macOS SDK, so the mapping is compiled in
+    // only for __APPLE__ builds.
+    constexpr int kMaxQosSlots = 256;
+    int slot_qos[kMaxQosSlots];
+    for (int slot = 0; slot < kMaxQosSlots; ++slot) {
+        slot_qos[slot] = -1;
+    }
+#if defined(__APPLE__)
+    const CpuInfo cpu_info = read_cpu_info();
+    if (options.use_affinity && cpu_info.perf_tier_count > 1) {
+        int base = 0;
+        for (int tier = 0; tier < cpu_info.perf_tier_count; ++tier) {
+            const int count = cpu_info.perf_tier[tier];
+            // Fastest tier -> UIQ, slowest -> BACKGROUND, middle -> USER_INITIATED.
+            int qos;
+            if (tier == 0) {
+                qos = QOS_CLASS_USER_INTERACTIVE;
+            } else if (tier == cpu_info.perf_tier_count - 1) {
+                qos = QOS_CLASS_BACKGROUND;
+            } else {
+                qos = QOS_CLASS_USER_INITIATED;
+            }
+            for (int k = 0; k < count && base + k < kMaxQosSlots; ++k) {
+                slot_qos[base + k] = qos;
+            }
+            base += count;
+        }
+    }
+#endif
     if (options.progress) {
         print_progress(0, total_pairs);
     }
@@ -918,9 +1170,15 @@ MatrixResult run_matrix(const Options& options, int n) {
                 continue;
             }
             const PairOutcome outcome =
-                run_pair(i, j, options.iterations, options.runs, owned_mode,
-                         options.use_affinity);
-            result.filtered[matrix_index(n, i, j)] = outcome.latency_ns;
+                run_pair(i, j, slot_qos[i], slot_qos[j], options.iterations,
+                         options.runs, owned_mode, options.use_affinity);
+            // Cell [i][j] is the hand-off from thread i to thread j.  The
+            // directional sample is used when it survived the guard, otherwise
+            // the window average of the pair (see run_pair).
+            result.filtered[matrix_index(n, i, j)] =
+                outcome.forward_ns == outcome.forward_ns
+                    ? outcome.forward_ns
+                    : outcome.latency_ns;
             if (!outcome.affinity_ok) {
                 ++unpinned_pairs;
             }
@@ -954,9 +1212,9 @@ void print_matrix(const MatrixResult& result) {
             } else {
                 const float value =
                     result.filtered[matrix_index(result.n, i, j)];
-                if (value != value) {
-                    // The pair could not be pinned, so there is no number that
-                    // belongs to the requested core pair.
+                if (value != value || value < 0.0f) {
+                    // The pair could not be pinned (NaN) or was never measured
+                    // (stopped early): no number belongs to that cell.
                     std::fputs("N/A", stdout);
                 } else {
                     // %.6f matches the original std::fixed << setprecision(6).
@@ -1016,7 +1274,7 @@ void write_csv(const std::string& path, const MatrixResult& result) {
             } else {
                 const float value =
                     result.filtered[matrix_index(result.n, i, j)];
-                if (value != value) {
+                if (value != value || value < 0.0f) {
                     std::fputs("N/A", output);
                 } else {
                     // %.6g matches the original std::defaultfloat << setprecision(6).
